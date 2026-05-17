@@ -1,0 +1,17 @@
+# Environnement — ne JAMAIS commiter
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Alembic
+alembic/versions/*.py
+
+# Divers
+*.log
+.DS_Store

@@ -1,0 +1,9 @@
+# Importer tous les modèles ici garantit qu'Alembic les découvre via Base.metadata
+from app.models.base import UUIDMixin, TimestampMixin          # noqa: F401
+from app.models.school import School                           # noqa: F401
+from app.models.user import User, UserRole, UserStatus         # noqa: F401
+from app.models.session import (                               # noqa: F401
+    ProgramSession, TeacherSession, SessionStatus,
+)
+from app.models.planning import PlanningSegment                # noqa: F401
+from app.models.seance import Seance, RapportProf, SeanceStatus  # noqa: F401
