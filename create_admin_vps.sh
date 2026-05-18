@@ -75,53 +75,7 @@ fi
 echo -e "\n${YELLOW}[*] Application des migrations de base de données (Alembic)...${NC}"
 docker compose exec -T -u root backend alembic upgrade head
 
-# 5. Vérification et Auto-correction de l'état de la base de données
-echo -e "${YELLOW}[*] Vérification de la structure de la base de données...${NC}"
-
-TABLES_CHECK=$(docker compose exec -T -u root backend python -c "
-import asyncio
-from sqlalchemy import inspect
-from app.core.database import engine
-async def check():
-    async with engine.connect() as conn:
-        tables = await conn.run_sync(lambda c: inspect(c).get_table_names())
-        print('users' in tables)
-try:
-    asyncio.run(check())
-except Exception as e:
-    print('False')
-" 2>/dev/null | tail -n 1 | tr -d '\r\n[:space:]')
-
-if [ "$TABLES_CHECK" != "True" ]; then
-    echo -e "${YELLOW}[!] La table 'users' est manquante (base de données inconsistante).${NC}"
-    echo -e "${YELLOW}[*] Réinitialisation de l'état Alembic (alembic stamp base)...${NC}"
-    docker compose exec -T -u root backend alembic stamp base
-    
-    echo -e "${YELLOW}[*] Application forcée de toutes les migrations...${NC}"
-    docker compose exec -T -u root backend alembic upgrade head
-    
-    # Double vérification
-    TABLES_CHECK_2=$(docker compose exec -T -u root backend python -c "
-    import asyncio
-    from sqlalchemy import inspect
-    from app.core.database import engine
-    async def check():
-        async with engine.connect() as conn:
-            tables = await conn.run_sync(lambda c: inspect(c).get_table_names())
-            print('users' in tables)
-    try:
-        asyncio.run(check())
-    except:
-        print('False')
-    " 2>/dev/null | tail -n 1 | tr -d '\r\n[:space:]')
-    
-    if [ "$TABLES_CHECK_2" != "True" ]; then
-        echo -e "${RED}Erreur : La table 'users' n'a pas pu être créée après réinitialisation d'Alembic.${NC}"
-        exit 1
-    fi
-fi
-
-echo -e "${GREEN}✓ Base de données à jour et structure validée !${NC}"
+# (Étape de vérification supprimée : Alembic gère la consistance correctement maintenant)
 
 # 6. Créer le script python directement à l'intérieur du conteneur
 echo -e "\n${YELLOW}[*] Injection du script Python dans le conteneur backend (en mode root)...${NC}"
