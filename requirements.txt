@@ -15,6 +15,7 @@ redis[asyncio]==5.2.1
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.1
 python-multipart==0.0.12
+slowapi==0.1.9
 
 # ── Validation / Sérialisation ────────────────────────────────────────────────
 pydantic==2.10.3

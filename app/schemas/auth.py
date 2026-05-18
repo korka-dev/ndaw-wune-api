@@ -73,7 +73,40 @@ class MeResponse(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     new_password:     str
+    confirm_password: str = ""   # optionnel : ignoré si vide
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Le mot de passe doit contenir au moins 8 caractères.")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Le mot de passe doit contenir au moins une majuscule.")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Le mot de passe doit contenir au moins un chiffre.")
+        return v
+
+    @field_validator("confirm_password", mode="after")
+    @classmethod
+    def passwords_match(cls, v: str, info) -> str:
+        if v and "new_password" in info.data and v != info.data["new_password"]:
+            raise ValueError("Les mots de passe ne correspondent pas.")
+        return v
+
+
+class ResetPasswordRequest(BaseModel):
+    """Réinitialisation de mot de passe sans authentification (écran 'Mot de passe oublié')."""
+    identifier:       str   # e-mail ou téléphone
+    new_password:     str
     confirm_password: str
+
+    @field_validator("identifier")
+    @classmethod
+    def normalize_identifier(cls, v: str) -> str:
+        v = v.strip()
+        if "@" in v:
+            return v.lower()
+        return _normalize_phone(v)
 
     @field_validator("new_password")
     @classmethod

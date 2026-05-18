@@ -156,13 +156,21 @@ async def change_password(
     Appelé uniquement depuis la route /auth/change-password.
     """
     # Empêcher de réutiliser le mot de passe par défaut
-    if verify_password(new_password, hash_password(_DEFAULT_PASSWORD)) and new_password == _DEFAULT_PASSWORD:
+    # Note : comparaison directe en clair (le mot de passe par défaut est connu du système)
+    if new_password == _DEFAULT_PASSWORD:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Vous ne pouvez pas conserver le mot de passe par défaut ({_DEFAULT_PASSWORD}).",
+            detail="Vous ne pouvez pas conserver le mot de passe temporaire attribué à la création du compte. Choisissez un nouveau mot de passe personnel.",
         )
 
-    user.password_hash       = hash_password(new_password)
+    # Vérifier que le nouveau mot de passe est suffisamment fort (min 8 caractères)
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Le mot de passe doit contenir au moins 8 caractères.",
+        )
+
+    user.password_hash        = hash_password(new_password)
     user.must_change_password = False
     await db.flush()
 

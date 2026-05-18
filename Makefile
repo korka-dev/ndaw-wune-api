@@ -58,7 +58,7 @@ create-admin:
 
 # ── Qualité du code ───────────────────────────────────────────────────────────
 test:
-	$(DC) exec backend pytest -v --tb=short
+	$(DC) exec backend pytest -v --tb=short -p no:cacheprovider
 
 lint:
 	$(DC) exec backend ruff check app/

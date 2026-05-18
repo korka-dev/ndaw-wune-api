@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import decode_token
+from app.core.security import decode_token, is_token_revoked
 from app.models.user import User, UserRole, UserStatus
 
 bearer_scheme = HTTPBearer(auto_error=True)
@@ -32,6 +32,10 @@ async def get_current_user(
         if not user_id:
             raise credentials_exception
     except JWTError:
+        raise credentials_exception
+
+    # Vérifier la blacklist Redis (révocation explicite : logout, changement mdp)
+    if await is_token_revoked(credentials.credentials):
         raise credentials_exception
 
     result = await db.execute(select(User).where(User.id == user_id))

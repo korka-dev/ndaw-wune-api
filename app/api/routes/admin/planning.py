@@ -4,15 +4,16 @@ import logging
 import re
 import uuid
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
+from app.core.pagination import Page, Pagination
 from app.core.redis import get_redis
 from app.models.planning import PlanningSegment
 from app.models.user import User
 from app.schemas.planning import (
     PlanningSegmentCreate, PlanningSegmentUpdate,
-    PlanningSegmentResponse, PlanningList,
+    PlanningSegmentResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -200,15 +201,32 @@ def _enrich(seg: PlanningSegment, teacher_name: str | None = None) -> PlanningSe
     )
 
 
-@router.get("", response_model=PlanningList)
-async def list_planning(db: DB, _: AdminUser, session_id: uuid.UUID | None = None):
-    q = select(PlanningSegment, User.name).outerjoin(User, User.id == PlanningSegment.teacher_id)
+@router.get("", response_model=Page[PlanningSegmentResponse])
+async def list_planning(
+    db: DB,
+    _: AdminUser,
+    page: Pagination,
+    session_id: uuid.UUID | None = None,
+) -> Page[PlanningSegmentResponse]:
+    base = (
+        select(PlanningSegment, User.name)
+        .outerjoin(User, User.id == PlanningSegment.teacher_id)
+        .order_by(PlanningSegment.jour, PlanningSegment.heure_debut)
+    )
     if session_id:
-        q = q.where(PlanningSegment.session_id == session_id)
-    result = await db.execute(q.order_by(PlanningSegment.jour, PlanningSegment.heure_debut))
-    rows = result.all()
-    items = [_enrich(r.PlanningSegment, r.name) for r in rows]
-    return PlanningList(total=len(items), items=items)
+        base = base.where(PlanningSegment.session_id == session_id)
+
+    total = (await db.execute(
+        select(func.count()).select_from(
+            select(PlanningSegment).where(
+                PlanningSegment.session_id == session_id
+            ).subquery() if session_id else select(PlanningSegment).subquery()
+        )
+    )).scalar_one()
+
+    result = await db.execute(base.offset(page.skip).limit(page.limit))
+    items  = [_enrich(r.PlanningSegment, r.name) for r in result.all()]
+    return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 
 @router.post("", response_model=PlanningSegmentResponse, status_code=status.HTTP_201_CREATED)

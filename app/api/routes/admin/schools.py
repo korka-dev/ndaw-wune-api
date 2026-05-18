@@ -1,10 +1,11 @@
 import uuid
 from fastapi import APIRouter, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
+from app.core.pagination import Page, Pagination
 from app.models.school import School
-from app.schemas.school import SchoolCreate, SchoolUpdate, SchoolResponse, SchoolList
+from app.schemas.school import SchoolCreate, SchoolUpdate, SchoolResponse
 
 router = APIRouter(prefix="/schools", tags=["Admin — Écoles"])
 
@@ -24,11 +25,12 @@ async def _check_phone_unique(db, phone: str | None, exclude_id: uuid.UUID | Non
         )
 
 
-@router.get("", response_model=SchoolList)
-async def list_schools(db: DB, _: AdminUser):
-    result = await db.execute(select(School).order_by(School.name))
-    schools = result.scalars().all()
-    return SchoolList(total=len(schools), items=schools)
+@router.get("", response_model=Page[SchoolResponse])
+async def list_schools(db: DB, _: AdminUser, page: Pagination) -> Page[SchoolResponse]:
+    base  = select(School).order_by(School.name)
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    items = (await db.execute(base.offset(page.skip).limit(page.limit))).scalars().all()
+    return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 
 @router.post("", response_model=SchoolResponse, status_code=status.HTTP_201_CREATED)

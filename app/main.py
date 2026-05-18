@@ -9,6 +9,9 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
 from app.core.database import engine
@@ -34,6 +37,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await engine.dispose()
 
 
+# ── Rate Limiter (protection brute force) ─────────────────────────────────────
+# L'instance est partagée — les routes l'importent via app.state.limiter
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+
+
 # ── Instance FastAPI ───────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -45,6 +53,11 @@ app = FastAPI(
     openapi_url=settings.openapi_url,
     lifespan=lifespan,
 )
+
+
+# ── Wiring du rate limiter ─────────────────────────────────────────────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ── Middlewares ────────────────────────────────────────────────────────────────
