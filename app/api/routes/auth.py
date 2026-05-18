@@ -4,7 +4,7 @@ import re
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Body
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from slowapi import Limiter
@@ -46,7 +46,7 @@ def _phone_variants(digits9: str) -> list[str]:
 
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("5/minute")          # max 5 tentatives de connexion par IP et par minute
-async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+async def login(request: Request, body: LoginRequest = Body(...), db: AsyncSession = Depends(get_db)) -> TokenResponse:
     """
     Connexion par e-mail ou numéro de téléphone.
     Accepte tous les formats de numéro (+221…, 00221…, 9 chiffres, avec espaces).
@@ -92,7 +92,7 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+async def refresh(body: RefreshRequest = Body(...), db: AsyncSession = Depends(get_db)) -> TokenResponse:
     """Renouvellement de la paire de tokens via le refresh token."""
     invalid = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -125,7 +125,7 @@ async def me(current_user: CurrentUser) -> MeResponse:
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
-    body: ChangePasswordRequest,
+    body: ChangePasswordRequest = Body(...),
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
@@ -159,7 +159,7 @@ async def logout(
 @limiter.limit("3/minute")
 async def reset_password(
     request: Request,
-    body: ResetPasswordRequest,
+    body: ResetPasswordRequest = Body(...),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """
