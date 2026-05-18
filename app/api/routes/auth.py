@@ -10,8 +10,10 @@ from jose import JWTError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
 
-from app.core.deps import CurrentUser, DB, bearer_scheme
+from app.core.deps import CurrentUser, bearer_scheme
 from app.core.security import create_token_pair, decode_token, is_token_revoked, revoke_token, verify_password
 
 # Instance locale — le wiring global est dans main.py
@@ -44,7 +46,7 @@ def _phone_variants(digits9: str) -> list[str]:
 
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("5/minute")          # max 5 tentatives de connexion par IP et par minute
-async def login(request: Request, body: LoginRequest, db: DB) -> TokenResponse:
+async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     """
     Connexion par e-mail ou numéro de téléphone.
     Accepte tous les formats de numéro (+221…, 00221…, 9 chiffres, avec espaces).
@@ -90,7 +92,7 @@ async def login(request: Request, body: LoginRequest, db: DB) -> TokenResponse:
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest, db: DB) -> TokenResponse:
+async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     """Renouvellement de la paire de tokens via le refresh token."""
     invalid = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -126,7 +128,7 @@ async def change_password(
     body: ChangePasswordRequest,
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
     current_user: CurrentUser,
-    db: DB,
+    db: AsyncSession = Depends(get_db),
 ) -> Response:
     """
     Change le mot de passe de l'utilisateur connecté.
@@ -158,7 +160,7 @@ async def logout(
 async def reset_password(
     request: Request,
     body: ResetPasswordRequest,
-    db: DB,
+    db: AsyncSession = Depends(get_db),
 ) -> Response:
     """
     Réinitialisation de mot de passe sans authentification.
