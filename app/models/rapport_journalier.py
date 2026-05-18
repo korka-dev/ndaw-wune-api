@@ -51,7 +51,7 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
 
     # ── Métadonnées ──────────────────────────────────────────────────────────
     soumis_en_offline: Mapped[bool]          = mapped_column(Boolean, default=True, nullable=False)
-    photo_classe_url:  Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    photo_classe_url:  Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # ── Relations ─────────────────────────────────────────────────────────────
     teacher: Mapped["User"] = relationship("User")
