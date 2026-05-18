@@ -125,9 +125,9 @@ async def me(current_user: CurrentUser) -> MeResponse:
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
-    body: ChangePasswordRequest = Body(...),
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
     current_user: CurrentUser,
+    body: ChangePasswordRequest = Body(...),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """
