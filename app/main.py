@@ -55,6 +55,8 @@ app = FastAPI(
 )
 
 
+from fastapi.exceptions import RequestValidationError
+
 # ── Wiring du rate limiter ─────────────────────────────────────────────────────
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -97,7 +99,30 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
-# ── Gestionnaire d'erreurs global ──────────────────────────────────────────────
+# ── Gestionnaires d'erreurs globaux ─────────────────────────────────────────────
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Loggue en détail les requêtes invalides pour simplifier le débogage."""
+    body_bytes = b""
+    try:
+        body_bytes = await request.body()
+    except Exception:
+        pass
+    
+    logger.error(
+        "⚠️ Erreur de validation (422) sur %s %s [%s] :\n- Erreurs : %s\n- Body reçu : %s",
+        request.method,
+        request.url.path,
+        getattr(request.state, "request_id", "—"),
+        exc.errors(),
+        body_bytes.decode("utf-8", errors="replace"),
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
+    )
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
