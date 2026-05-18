@@ -20,6 +20,7 @@ help:
 	@echo "  make shell      — Ouvrir un shell dans le conteneur API"
 	@echo "  make migrate    — Appliquer les migrations Alembic"
 	@echo "  make seed       — Créer le compte admin initial"
+	@echo "  make create-admin — Créer le compte admin spécifique (adiallo)"
 	@echo "  make test       — Lancer les tests pytest"
 	@echo "  make lint       — Vérifier le code avec ruff"
 	@echo "  make format     — Formater le code avec ruff"
@@ -52,6 +53,9 @@ revision:
 seed:
 	$(DC) exec backend python scripts/seed.py
 
+create-admin:
+	$(DC) exec backend python scripts/create_admin.py
+
 # ── Qualité du code ───────────────────────────────────────────────────────────
 test:
 	$(DC) exec backend pytest -v --tb=short
@@ -69,3 +73,4 @@ bootstrap: up
 	@sleep 5
 	$(MAKE) migrate
 	$(MAKE) seed
+
