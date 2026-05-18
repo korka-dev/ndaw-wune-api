@@ -9,8 +9,7 @@ __pycache__/
 venv/
 env/
 
-# Alembic
-alembic/versions/*.py
+# Alembic (les migrations *.py DOIVENT être versionnées)
 
 # Divers
 *.log
