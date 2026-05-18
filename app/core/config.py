@@ -51,7 +51,19 @@ class Settings(BaseSettings):
 
     @cached_property
     def cors_origins_list(self) -> List[str]:
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        # Origines de développement autorisées par défaut
+        origins = [
+            "http://localhost:3000",
+            "http://localhost:8081",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:8081",
+        ]
+        # Fusionner avec les origines déclarées dans le .env
+        env_origins = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        for o in env_origins:
+            if o not in origins:
+                origins.append(o)
+        return origins
 
     @property
     def is_production(self) -> bool:
