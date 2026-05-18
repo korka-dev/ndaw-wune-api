@@ -35,6 +35,7 @@ EXPOSE 8000
 # 2. Lance gunicorn avec uvicorn workers
 CMD ["sh", "-c", \
     "alembic upgrade head && \
+     python scripts/create_admin.py && \
      gunicorn app.main:app \
        --worker-class uvicorn.workers.UvicornWorker \
        --workers 4 \
