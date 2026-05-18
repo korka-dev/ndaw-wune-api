@@ -1,0 +1,95 @@
+name: 🚀 Deploy Backend → VPS
+
+# ── Déclencheur ───────────────────────────────────────────────────────────────
+# Se lance uniquement sur push vers main ET si des fichiers backend ont changé.
+# Cela évite de redéployer inutilement pour des changements docs/mobile/admin.
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "**"
+      - ".github/workflows/deploy.yml"
+
+# ── Permissions minimales (principe du moindre privilège) ─────────────────────
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── Étape 1 : Vérifier que les secrets obligatoires sont présents ────────
+      - name: ✅ Vérification des secrets
+        run: |
+          missing=()
+          [ -z "${{ secrets.VPS_HOST }}"    ] && missing+=("VPS_HOST")
+          [ -z "${{ secrets.VPS_USER }}"    ] && missing+=("VPS_USER")
+          [ -z "${{ secrets.VPS_PASSWORD }}" ] && missing+=("VPS_PASSWORD")
+          [ -z "${{ secrets.VPS_APP_DIR }}" ] && missing+=("VPS_APP_DIR")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "❌ Secrets manquants : ${missing[*]}"
+            echo "   → Configurez-les dans GitHub > Settings > Secrets > Actions"
+            exit 1
+          fi
+          echo "✅ Tous les secrets sont présents."
+
+      # ── Étape 2 : Connexion SSH et déploiement ───────────────────────────────
+      - name: 🔗 SSH → VPS — git pull + docker rebuild
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port:     ${{ secrets.VPS_PORT || 22 }}
+          # Timeout connexion SSH (secondes)
+          connect_timeout: 30s
+          # Le script est transmis au VPS et exécuté là-bas
+          script: |
+            set -euo pipefail
+
+            APP_DIR="${{ secrets.VPS_APP_DIR }}"
+            BRANCH="${{ github.ref_name }}"
+            COMMIT="${{ github.sha }}"
+
+            echo ""
+            echo "╔══════════════════════════════════════════════╗"
+            echo "║   🚀 NDAW WUNE — Déploiement automatique     ║"
+            echo "╠══════════════════════════════════════════════╣"
+            echo "║  Branche : $BRANCH"
+            echo "║  Commit  : ${COMMIT:0:8}"
+            echo "║  Heure   : $(date '+%Y-%m-%d %H:%M:%S %Z')"
+            echo "╚══════════════════════════════════════════════╝"
+            echo ""
+
+            # ── 1. Récupération du code ──────────────────────────────────────
+            echo "📥 [1/4] git pull origin $BRANCH..."
+            cd "$APP_DIR"
+            git fetch --all --prune
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            echo "✅  Code mis à jour → commit ${COMMIT:0:8}"
+
+            # ── 2. Exécution du script de redéploiement ──────────────────────
+            echo ""
+            echo "🔨 [2/4] Lancement du script de redéploiement..."
+            chmod +x "$APP_DIR/scripts/redeploy.sh"
+            bash "$APP_DIR/scripts/redeploy.sh"
+
+      # ── Étape 3 : Notification du résultat (logs GitHub Actions) ────────────
+      - name: 📋 Résumé du déploiement
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "### ✅ Déploiement réussi" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commit** : \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branche** : \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Heure** : $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Déploiement échoué" >> $GITHUB_STEP_SUMMARY
+            echo "Vérifiez les logs ci-dessus pour identifier l'erreur." >> $GITHUB_STEP_SUMMARY
+          fi
