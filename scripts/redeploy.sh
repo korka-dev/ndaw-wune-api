@@ -30,8 +30,7 @@ err()  { echo -e "${RED}❌ $*${NC}"; }
 # Ce script peut être lancé depuis n'importe où ; il se place lui-même à la
 # racine du projet en remontant depuis son propre chemin.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BACKEND_DIR="$PROJECT_ROOT/backend"
+BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$BACKEND_DIR"
 
