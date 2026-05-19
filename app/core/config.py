@@ -51,14 +51,26 @@ class Settings(BaseSettings):
 
     @cached_property
     def cors_origins_list(self) -> List[str]:
-        # Origines de développement autorisées par défaut
+        """
+        Origines autorisées par le middleware CORS.
+
+        Production : uniquement le dashboard admin (https://admin.ndawwune.cloud).
+          L'app mobile est une application native React Native — elle ne passe pas
+          par le mécanisme CORS du navigateur et n'a donc pas besoin d'être listée.
+
+        Développement : localhost + origines supplémentaires déclarées dans CORS_ORIGINS.
+        """
+        if self.is_production:
+            return ["https://admin.ndawwune.cloud"]
+
+        # Développement : origines locales par défaut
         origins = [
             "http://localhost:3000",
             "http://localhost:8081",
             "http://127.0.0.1:3000",
             "http://127.0.0.1:8081",
         ]
-        # Fusionner avec les origines déclarées dans le .env
+        # Fusionner avec les origines déclarées dans le .env (ex : IP Wi-Fi locale)
         env_origins = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
         for o in env_origins:
             if o not in origins:
