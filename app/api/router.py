@@ -23,13 +23,13 @@ api_router.include_router(sessions.router,                 prefix="/admin")
 api_router.include_router(teachers.router,                 prefix="/admin")
 api_router.include_router(schools.router,                  prefix="/admin")
 api_router.include_router(planning.router,                 prefix="/admin")
+api_router.include_router(admin_rapports_journalier.router, prefix="/admin")  # avant rapports pour éviter conflit /{rapport_id}
 api_router.include_router(rapports.router,                 prefix="/admin")
 api_router.include_router(superviseurs.router,             prefix="/admin")
 api_router.include_router(evaluateurs.router,              prefix="/admin")
 api_router.include_router(eleves.router,                   prefix="/admin")
 api_router.include_router(suivi_seances.router,            prefix="/admin")
 api_router.include_router(suivi_superviseurs.router,       prefix="/admin")
-api_router.include_router(admin_rapports_journalier.router, prefix="/admin")
 
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")

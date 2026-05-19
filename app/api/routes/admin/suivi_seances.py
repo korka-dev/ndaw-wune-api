@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, case
 
 from app.core.deps import AdminUser, DB
 from app.models.seance import Seance, SeanceStatus
@@ -67,7 +67,7 @@ async def list_suivi_seances(
             School.name.label("school_name"),
             func.count(Seance.id).label("total_seances"),
             func.sum(
-                func.cast(Seance.status == SeanceStatus.terminee, func.Integer())
+                case((Seance.status == SeanceStatus.terminee, 1), else_=0)
             ).label("seances_terminees"),
             func.sum(Seance.duree_minutes).label("duree_totale_minutes"),
         )
