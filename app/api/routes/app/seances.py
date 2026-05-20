@@ -6,7 +6,7 @@ from fastapi import APIRouter, status
 
 from app.core.deps import DB, TeacherUser
 from app.core.pagination import Page, Pagination
-from app.schemas.seance import SeanceFinish, SeanceResponse, SeanceStart
+from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceResponse, SeanceStart
 from app.services import seance_service
 
 router = APIRouter(prefix="/seances", tags=["App — Séances"])
@@ -27,6 +27,28 @@ async def start_seance(body: SeanceStart, current_user: TeacherUser, db: DB) -> 
     return await seance_service.start_seance(db, current_user.id, body)
 
 
+@router.post("/{seance_id}/pause", response_model=SeanceResponse)
+async def pause_seance(
+    seance_id: uuid.UUID,
+    body: SeancePauseBody,
+    current_user: TeacherUser,
+    db: DB,
+) -> SeanceResponse:
+    """Enregistre une mise en pause. Idempotent si déjà en pause."""
+    return await seance_service.record_pause(db, seance_id, current_user.id, body)
+
+
+@router.post("/{seance_id}/resume", response_model=SeanceResponse)
+async def resume_seance(
+    seance_id: uuid.UUID,
+    body: SeanceResumeBody,
+    current_user: TeacherUser,
+    db: DB,
+) -> SeanceResponse:
+    """Ferme la dernière pause et recalcule le total des pauses."""
+    return await seance_service.record_resume(db, seance_id, current_user.id, body)
+
+
 @router.post("/{seance_id}/finish", response_model=SeanceResponse)
 async def finish_seance(
     seance_id: uuid.UUID,
@@ -34,7 +56,7 @@ async def finish_seance(
     current_user: TeacherUser,
     db: DB,
 ) -> SeanceResponse:
-    """Arrête le timer et clôture la séance."""
+    """Arrête le timer et clôture la séance. Accepte les pauses offline."""
     return await seance_service.finish_seance(db, seance_id, current_user.id, body)
 
 

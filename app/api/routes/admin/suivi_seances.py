@@ -122,14 +122,16 @@ async def get_suivi_teacher(
         teacher_name=teacher.name,
         seances=[
             {
-                "id":             str(s.id),
-                "classe":         s.classe,
-                "matiere":        s.matiere,
-                "date_seance":    s.date_seance.isoformat() if s.date_seance else None,
-                "status":         s.status.value,
-                "duree_minutes":  s.duree_minutes,
-                "started_at":     s.started_at.isoformat() if s.started_at else None,
-                "finished_at":    s.finished_at.isoformat() if s.finished_at else None,
+                "id":                   str(s.id),
+                "classe":               s.classe,
+                "matiere":              s.matiere,
+                "date_seance":          s.date_seance.isoformat() if s.date_seance else None,
+                "status":               s.status.value,
+                "duree_minutes":        s.duree_minutes,
+                "started_at":           s.started_at.isoformat() if s.started_at else None,
+                "finished_at":          s.finished_at.isoformat() if s.finished_at else None,
+                "pauses":               s.pauses or [],
+                "total_paused_minutes": s.total_paused_minutes,
             }
             for s in seances
         ],

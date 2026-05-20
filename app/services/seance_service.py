@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.seance import RapportProf, Seance, SeanceStatus
-from app.schemas.seance import SeanceFinish, SeanceStart, RapportCreate
+from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceStart, RapportCreate
 
 
 # ── Séances ────────────────────────────────────────────────────────────────────
@@ -42,13 +42,12 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
     return seance
 
 
-async def finish_seance(
+async def _get_seance_owned(
     db: AsyncSession,
     seance_id: uuid.UUID,
     teacher_id: uuid.UUID,
-    body: SeanceFinish,
 ) -> Seance:
-    """Clôture le timer. Vérifie l'ownership et le statut."""
+    """Récupère une séance en vérifiant l'ownership. Lève 404 si introuvable."""
     result = await db.execute(
         select(Seance).where(
             Seance.id         == seance_id,
@@ -58,6 +57,75 @@ async def finish_seance(
     seance = result.scalar_one_or_none()
     if seance is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Séance introuvable.")
+    return seance
+
+
+async def record_pause(
+    db: AsyncSession,
+    seance_id: uuid.UUID,
+    teacher_id: uuid.UUID,
+    body: SeancePauseBody,
+) -> Seance:
+    """Enregistre un événement de mise en pause dans la séance."""
+    seance = await _get_seance_owned(db, seance_id, teacher_id)
+    if seance.status != SeanceStatus.en_cours:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cette séance n'est plus en cours.")
+
+    pauses = list(seance.pauses or [])
+    pauses.append({"paused_at": body.paused_at.isoformat(), "resumed_at": None})
+    seance.pauses = pauses
+
+    await db.flush()
+    await db.refresh(seance)
+    return seance
+
+
+async def record_resume(
+    db: AsyncSession,
+    seance_id: uuid.UUID,
+    teacher_id: uuid.UUID,
+    body: SeanceResumeBody,
+) -> Seance:
+    """Ferme le dernier événement de pause (resumed_at) et recalcule total_paused_minutes."""
+    seance = await _get_seance_owned(db, seance_id, teacher_id)
+    if seance.status != SeanceStatus.en_cours:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cette séance n'est plus en cours.")
+
+    pauses = list(seance.pauses or [])
+
+    # Fermer la dernière pause ouverte
+    for p in reversed(pauses):
+        if p.get("resumed_at") is None:
+            p["resumed_at"] = body.resumed_at.isoformat()
+            break
+
+    # Recalculer le total des pauses (en minutes)
+    from datetime import datetime as dt
+    total_ms = 0
+    for p in pauses:
+        if p.get("paused_at") and p.get("resumed_at"):
+            try:
+                pa = dt.fromisoformat(p["paused_at"])
+                ra = dt.fromisoformat(p["resumed_at"])
+                total_ms += max(0, int((ra - pa).total_seconds() * 1000))
+            except Exception:
+                pass
+    seance.pauses               = pauses
+    seance.total_paused_minutes = max(0, round(total_ms / 60000))
+
+    await db.flush()
+    await db.refresh(seance)
+    return seance
+
+
+async def finish_seance(
+    db: AsyncSession,
+    seance_id: uuid.UUID,
+    teacher_id: uuid.UUID,
+    body: SeanceFinish,
+) -> Seance:
+    """Clôture le timer. Fusionne les pauses offline si fournies."""
+    seance = await _get_seance_owned(db, seance_id, teacher_id)
     if seance.status != SeanceStatus.en_cours:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cette séance n'est plus en cours.")
 
@@ -65,6 +133,12 @@ async def finish_seance(
     seance.duree_minutes      = body.duree_minutes
     seance.nb_eleves_presents = body.nb_eleves_presents
     seance.status             = SeanceStatus.terminee
+
+    # Fusionner les pauses offline si le serveur n'en a pas encore
+    if body.pauses and not seance.pauses:
+        seance.pauses = [p.model_dump() for p in body.pauses]
+    if body.total_paused_minutes is not None and seance.total_paused_minutes is None:
+        seance.total_paused_minutes = body.total_paused_minutes
 
     await db.flush()
     await db.refresh(seance)

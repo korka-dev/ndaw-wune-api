@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -57,6 +57,13 @@ class Seance(Base, UUIDMixin, TimestampMixin):
     started_at:  Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     duree_minutes: Mapped[Optional[int]]    = mapped_column(Integer, nullable=True)
+
+    # Pauses — liste d'événements [{paused_at, resumed_at?}]
+    # Stockée en JSONB pour éviter une table séparée.
+    pauses: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="'[]'::jsonb"
+    )
+    total_paused_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Effectif
     nb_eleves_presents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

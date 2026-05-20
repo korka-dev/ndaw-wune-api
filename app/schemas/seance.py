@@ -5,6 +5,14 @@ from pydantic import BaseModel, field_validator
 from app.models.seance import SeanceStatus
 
 
+# ── Pause event ───────────────────────────────────────────────────────────────
+
+class PauseEvent(BaseModel):
+    """Un événement pause/reprise dans une séance."""
+    paused_at:   str            # ISO 8601
+    resumed_at:  Optional[str] = None  # None si la pause n'est pas encore levée
+
+
 # ── Seance ────────────────────────────────────────────────────────────────────
 
 class SeanceStart(BaseModel):
@@ -25,11 +33,24 @@ class SeanceStart(BaseModel):
         return v.strip()
 
 
+class SeancePauseBody(BaseModel):
+    """Payload envoyé quand l'enseignant met en pause."""
+    paused_at: datetime
+
+
+class SeanceResumeBody(BaseModel):
+    """Payload envoyé quand l'enseignant reprend après une pause."""
+    resumed_at: datetime
+
+
 class SeanceFinish(BaseModel):
     """Payload envoyé quand l'enseignant stoppe le timer."""
     finished_at:          datetime
     duree_minutes:        int
-    nb_eleves_presents:   Optional[int] = None
+    nb_eleves_presents:   Optional[int]       = None
+    # Pauses transmises pour réconciliation offline (optionnel)
+    pauses:               List[PauseEvent]    = []
+    total_paused_minutes: Optional[int]       = None
 
 
 class SeanceResponse(BaseModel):
@@ -46,6 +67,8 @@ class SeanceResponse(BaseModel):
     nb_eleves_presents:   Optional[int]
     nb_eleves_total:      Optional[int]
     status:               SeanceStatus
+    pauses:               List[PauseEvent]    = []
+    total_paused_minutes: Optional[int]       = None
 
     model_config = {"from_attributes": True}
 
