@@ -3,10 +3,10 @@
 #  NDAW WUNE — Script de redéploiement VPS
 #
 #  Repo  : git@github.com:korka-dev/ndaw-wune-api.git
-#  VPS   : /opt/ndaw-wune  (nom du projet : ndaw-wune)
+#  VPS   : ndaw-wune  (nom du projet : ndaw-wune)
 #
 #  Usage manuel sur le VPS :
-#    cd /opt/ndaw-wune
+#    cd ndaw-wune
 #    bash backend/scripts/redeploy.sh
 #
 #  Pré-requis :
@@ -33,15 +33,15 @@ err()  { echo -e "${RED}❌ $*${NC}"; }
 # ── Répertoires ───────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROJECT_DIR="/opt/ndaw-wune"
+PROJECT_DIR="ndaw-wune"
 
-# Si on n'est pas dans /opt/ndaw-wune, on s'y place
+# Si on n'est pas dans ndaw-wune, on s'y place
 if [ -d "$PROJECT_DIR" ]; then
   cd "$PROJECT_DIR"
 else
   # Fallback : racine du projet détectée depuis le script
   cd "$BACKEND_DIR/.."
-  warn "Répertoire /opt/ndaw-wune introuvable, utilisation de $(pwd)"
+  warn "Répertoire ndaw-wune introuvable, utilisation de $(pwd)"
 fi
 
 echo ""
