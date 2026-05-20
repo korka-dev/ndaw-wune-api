@@ -6,12 +6,13 @@
 #  VPS   : ndaw-wune  (nom du projet : ndaw-wune)
 #
 #  Usage manuel sur le VPS :
-#    cd ndaw-wune
+#    cd ndaw-wune          # se placer dans le dossier du projet
+#    git pull origin main  # récupérer le code manuellement
 #    bash backend/scripts/redeploy.sh
 #
 #  Pré-requis :
 #    - Docker + Docker Compose installés
-#    - backend/.env configuré
+#    - ndaw-wune/.env configuré
 #    - Clé SSH du VPS autorisée sur GitHub (git@github.com)
 # ==============================================================================
 
@@ -69,13 +70,14 @@ fi
 ok "Pré-requis vérifiés."
 echo ""
 
-# ── 1. Récupération du code ───────────────────────────────────────────────────
-log "[1/6] Récupération du code depuis GitHub..."
+# ── 1. Mise à jour forcée depuis le repo ─────────────────────────────────────
+log "[1/6] Synchronisation forcée avec GitHub (origin/main)..."
 
 git fetch origin
-git pull origin main
+git reset --hard origin/main
+git clean -fd
 
-ok "Code à jour — $(git log -1 --format='%h %s' HEAD)"
+ok "Code synchronisé — $(git log -1 --format='%h %s' HEAD)"
 echo ""
 
 # ── 2. Build de l'image backend ──────────────────────────────────────────────
@@ -88,7 +90,7 @@ cd ..
 ok "Image buildée."
 echo ""
 
-# ── 3. Démarrage de db et redis ───────────────────────────────────────────────
+# ── 2. Démarrage de db et redis ───────────────────────────────────────────────
 log "[3/6] Démarrage de db et redis..."
 
 cd backend
@@ -107,7 +109,7 @@ done
 ok "db et redis actifs."
 echo ""
 
-# ── 4. Migrations Alembic ─────────────────────────────────────────────────────
+# ── 3. Migrations Alembic ─────────────────────────────────────────────────────
 log "[4/6] Application des migrations Alembic (alembic upgrade head)..."
 
 docker compose run --rm --no-deps backend alembic upgrade head
@@ -115,7 +117,7 @@ docker compose run --rm --no-deps backend alembic upgrade head
 ok "Migrations appliquées."
 echo ""
 
-# ── 5. Redémarrage du backend ────────────────────────────────────────────────
+# ── 4. Redémarrage du backend ────────────────────────────────────────────────
 log "[5/6] Redémarrage du service backend..."
 
 docker compose up -d --no-deps backend
@@ -123,7 +125,7 @@ docker compose up -d --no-deps backend
 ok "Conteneur backend redémarré."
 echo ""
 
-# ── 6. Health check ───────────────────────────────────────────────────────────
+# ── 5. Health check ───────────────────────────────────────────────────────────
 log "[6/6] Health check (max 2 min)..."
 
 BACKEND_CONTAINER=$(docker compose ps -q backend 2>/dev/null)
