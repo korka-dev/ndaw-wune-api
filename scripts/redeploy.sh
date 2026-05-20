@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#  NDAW WUNE — Script de redéploiement (appelé par GitHub Actions ou en manuel)
+#  NDAW WUNE — Script de redéploiement VPS
+#
+#  Repo  : git@github.com:korka-dev/ndaw-wune-api.git
+#  VPS   : /opt/ndaw-wune  (nom du projet : ndaw-wune)
 #
 #  Usage manuel sur le VPS :
-#    cd /opt/ndawwune          # ou le répertoire où se trouve le projet
+#    cd /opt/ndaw-wune
 #    bash backend/scripts/redeploy.sh
 #
-#  Ce script suppose que :
-#    - Docker et Docker Compose sont installés
-#    - Le fichier backend/.env existe et est configuré
-#    - Le répertoire courant est la racine du projet ($VPS_APP_DIR)
-#    - Git est configuré (accès au dépôt)
+#  Pré-requis :
+#    - Docker + Docker Compose installés
+#    - backend/.env configuré
+#    - Clé SSH du VPS autorisée sur GitHub (git@github.com)
 # ==============================================================================
 
 set -euo pipefail
@@ -28,67 +30,77 @@ ok()   { echo -e "${GREEN}✅ $*${NC}"; }
 warn() { echo -e "${YELLOW}⚠  $*${NC}"; }
 err()  { echo -e "${RED}❌ $*${NC}"; }
 
-# ── Répertoire du projet ──────────────────────────────────────────────────────
+# ── Répertoires ───────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROJECT_DIR="$(cd "$BACKEND_DIR/.." && pwd)"
+PROJECT_DIR="/opt/ndaw-wune"
 
-cd "$PROJECT_DIR"
+# Si on n'est pas dans /opt/ndaw-wune, on s'y place
+if [ -d "$PROJECT_DIR" ]; then
+  cd "$PROJECT_DIR"
+else
+  # Fallback : racine du projet détectée depuis le script
+  cd "$BACKEND_DIR/.."
+  warn "Répertoire /opt/ndaw-wune introuvable, utilisation de $(pwd)"
+fi
 
 echo ""
 echo -e "${BOLD}══════════════════════════════════════════════${NC}"
 echo -e "${BOLD}   NDAW WUNE — Redéploiement Backend VPS      ${NC}"
 echo -e "${BOLD}══════════════════════════════════════════════${NC}"
+echo -e "   Repo : git@github.com:korka-dev/ndaw-wune-api.git"
+echo -e "   Dir  : $(pwd)"
 echo ""
 
 # ── Pré-requis ────────────────────────────────────────────────────────────────
 log "[0/6] Vérification des pré-requis..."
 
 if ! command -v docker &>/dev/null; then
-  err "Docker n'est pas installé. Lancez d'abord : bash backend/deploy_vps.sh"
+  err "Docker n'est pas installé."
   exit 1
 fi
 
-if [ ! -f "$BACKEND_DIR/.env" ]; then
+if [ ! -f "backend/.env" ]; then
   err "Le fichier backend/.env est manquant !"
-  echo "     Copiez backend/.env.example → backend/.env et remplissez les valeurs."
+  echo "     Créez-le depuis backend/.env.example et remplissez les valeurs."
   exit 1
 fi
 
 ok "Pré-requis vérifiés."
 echo ""
 
-# ── 1. Récupérer la dernière version du code ──────────────────────────────────
-log "[1/6] Récupération du code (git pull)..."
+# ── 1. Récupération du code ───────────────────────────────────────────────────
+log "[1/6] Récupération du code depuis GitHub..."
 
-git fetch --all
+git fetch origin
 git pull origin main
 
-ok "Code mis à jour."
+ok "Code à jour — $(git log -1 --format='%h %s' HEAD)"
 echo ""
 
 # ── 2. Build de l'image backend ──────────────────────────────────────────────
-log "[2/6] Build de l'image Docker (backend uniquement)..."
+log "[2/6] Build de l'image Docker (backend)..."
 
-cd "$BACKEND_DIR"
+cd backend
 docker compose build backend
+cd ..
 
 ok "Image buildée."
 echo ""
 
-# ── 3. S'assurer que db et redis tournent ────────────────────────────────────
-log "[3/6] Démarrage de db et redis (si pas déjà actifs)..."
+# ── 3. Démarrage de db et redis ───────────────────────────────────────────────
+log "[3/6] Démarrage de db et redis..."
 
+cd backend
 docker compose up -d db redis
 
-# Attendre que postgres soit prêt avant de lancer les migrations
+# Attendre que PostgreSQL soit prêt
 log "    Attente de PostgreSQL..."
-MAX_PG=15
-for i in $(seq 1 $MAX_PG); do
-  if docker compose exec -T db pg_isready -U "${POSTGRES_USER:-ndawwune}" &>/dev/null; then
+for i in $(seq 1 15); do
+  if docker compose exec -T db pg_isready &>/dev/null; then
     break
   fi
-  echo "   PostgreSQL pas encore prêt ($i/$MAX_PG)..."
+  echo "   PostgreSQL pas encore prêt ($i/15)..."
   sleep 3
 done
 
@@ -96,9 +108,8 @@ ok "db et redis actifs."
 echo ""
 
 # ── 4. Migrations Alembic ─────────────────────────────────────────────────────
-log "[4/6] Application des migrations Alembic..."
+log "[4/6] Application des migrations Alembic (alembic upgrade head)..."
 
-# On lance alembic dans le conteneur backend (image déjà buildée)
 docker compose run --rm --no-deps backend alembic upgrade head
 
 ok "Migrations appliquées."
@@ -113,7 +124,7 @@ ok "Conteneur backend redémarré."
 echo ""
 
 # ── 6. Health check ───────────────────────────────────────────────────────────
-log "[6/6] Attente du healthcheck Docker (max 2 min)..."
+log "[6/6] Health check (max 2 min)..."
 
 BACKEND_CONTAINER=$(docker compose ps -q backend 2>/dev/null)
 MAX_TRIES=20
@@ -121,16 +132,12 @@ STATUS=""
 
 for i in $(seq 1 $MAX_TRIES); do
   STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$BACKEND_CONTAINER" 2>/dev/null || echo "unknown")
-
   case "$STATUS" in
-    healthy)
-      break
-      ;;
+    healthy)   break ;;
     unhealthy)
-      err "Le backend est en état 'unhealthy' après le démarrage."
-      echo ""
-      echo "── Derniers logs du backend ──────────────────────"
+      err "Backend 'unhealthy'. Logs :"
       docker compose logs --tail=50 backend
+      cd ..
       exit 1
       ;;
     *)
@@ -141,21 +148,20 @@ for i in $(seq 1 $MAX_TRIES); do
 done
 
 if [ "$STATUS" != "healthy" ]; then
-  err "Timeout : le backend n'est pas devenu 'healthy' en temps imparti."
-  echo ""
-  echo "── Derniers logs du backend ──────────────────────"
+  err "Timeout : le backend n'est pas devenu healthy."
   docker compose logs --tail=50 backend
+  cd ..
   exit 1
 fi
 
 ok "Backend healthy !"
 echo ""
 
-# ── Nettoyage des images orphelines ──────────────────────────────────────────
-log "Nettoyage des anciennes images Docker..."
+# ── Nettoyage ─────────────────────────────────────────────────────────────────
+log "Nettoyage des anciennes images..."
 docker image prune -f 2>/dev/null || true
-ok "Nettoyage effectué."
-echo ""
+
+cd ..
 
 # ── Résumé ────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}${GREEN}══════════════════════════════════════════════${NC}"
@@ -163,8 +169,9 @@ echo -e "${BOLD}${GREEN}   ✅ Déploiement terminé avec succès !        ${NC}
 echo -e "${BOLD}${GREEN}══════════════════════════════════════════════${NC}"
 echo ""
 echo -e "${BOLD}Services actifs :${NC}"
-docker compose ps
+cd backend && docker compose ps && cd ..
 echo ""
-echo -e "${BOLD}Endpoint de santé :${NC}"
-curl -sf https://api.ndawwune.cloud/health && echo "" || warn "Health check HTTP non accessible (normal si Nginx n'est pas encore configuré)"
+echo -e "${BOLD}Vérification de l'API :${NC}"
+curl -sf https://api.ndawwune.cloud/health && echo "" \
+  || warn "API non accessible via HTTPS (vérifier Nginx / certificat SSL)"
 echo ""
