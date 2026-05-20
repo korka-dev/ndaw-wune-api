@@ -18,9 +18,12 @@ class Eleve(Base, UUIDMixin, TimestampMixin):
         UniqueConstraint("school_id", "classe", "nom", "prenom", name="uq_eleve_school_classe_nom"),
     )
 
-    nom:     Mapped[str]           = mapped_column(String(100), nullable=False)
-    prenom:  Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    classe:  Mapped[str]           = mapped_column(String(50),  nullable=False)
+    nom:             Mapped[str]           = mapped_column(String(100), nullable=False)
+    prenom:          Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    classe:          Mapped[str]           = mapped_column(String(50),  nullable=False)
+    genre:           Mapped[Optional[str]] = mapped_column(String(20),  nullable=True)
+    date_naissance:  Mapped[Optional[str]] = mapped_column(String(10),  nullable=True)  # ISO YYYY-MM-DD
+    statut:          Mapped[str]           = mapped_column(String(20),  nullable=False, default="actif", server_default="actif")
 
     school_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

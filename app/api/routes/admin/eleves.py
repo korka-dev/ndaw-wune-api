@@ -1,10 +1,13 @@
 """Endpoints Admin — Élèves."""
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
@@ -67,3 +70,58 @@ async def delete_eleve(eleve_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
         raise HTTPException(status_code=404, detail="Élève introuvable.")
     await db.delete(eleve)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ── Export CSV ────────────────────────────────────────────────────────────────
+
+@router.get("/export/csv")
+async def export_eleves_csv(db: DB, _: AdminUser) -> StreamingResponse:
+    items = (await db.execute(select(Eleve).order_by(Eleve.nom))).scalars().all()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["nom", "prenom", "sexe", "date_naissance", "classe", "statut"])
+    for e in items:
+        writer.writerow([
+            e.nom, e.prenom or "", e.genre or "", e.date_naissance or "",
+            e.classe, e.statut,
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=eleves.csv"},
+    )
+
+
+# ── Import CSV ────────────────────────────────────────────────────────────────
+
+@router.post("/import/csv")
+async def import_eleves_csv(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    content = (await file.read()).decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(content))
+    required = {"nom", "classe"}
+    if not required.issubset({f.lower().strip() for f in (reader.fieldnames or [])}):
+        raise HTTPException(status_code=422, detail="Colonnes requises : nom, classe")
+
+    imported = 0
+    errors: list[str] = []
+    for i, row in enumerate(reader, start=2):
+        nom    = (row.get("nom") or "").strip()
+        classe = (row.get("classe") or "").strip()
+        if not nom or not classe:
+            errors.append(f"Ligne {i} : nom ou classe manquant.")
+            continue
+        eleve = Eleve(
+            nom=nom,
+            prenom=(row.get("prenom") or "").strip() or None,
+            classe=classe,
+            genre=(row.get("sexe") or row.get("genre") or "").strip() or None,
+            date_naissance=(row.get("date_naissance") or "").strip() or None,
+            statut=(row.get("statut") or "actif").strip(),
+        )
+        db.add(eleve)
+        imported += 1
+
+    if imported:
+        await db.flush()
+    return {"imported": imported, "errors": errors}
