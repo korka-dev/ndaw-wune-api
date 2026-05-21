@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import csv
 import io
-import uuid
+import uuid as uuid_module
+from datetime import datetime, timezone
 from typing import Optional
 
 import pdfplumber
@@ -11,6 +12,7 @@ import openpyxl
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
@@ -172,6 +174,35 @@ def _parse_pdf(content_bytes: bytes) -> tuple[list[dict], list[str]]:
     return rows, errors
 
 
+# ── Bulk insert ───────────────────────────────────────────────────────────────
+
+async def _bulk_insert(db, rows: list[dict]) -> int:
+    """
+    Insère les élèves en une seule requête executemany via pg_insert.
+    Beaucoup plus rapide qu'une boucle de db.add() pour les gros volumes.
+    ON CONFLICT DO NOTHING : les doublons exacts sont ignorés silencieusement.
+    Retourne le nombre de lignes réellement insérées.
+    """
+    if not rows:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    bulk = [
+        {
+            "id":             uuid_module.uuid4(),
+            "created_at":     now,
+            "updated_at":     now,
+            **kwargs,
+        }
+        for kwargs in rows
+    ]
+
+    stmt = pg_insert(Eleve).values(bulk).on_conflict_do_nothing()
+    result = await db.execute(stmt)
+    # rowcount peut être -1 sur certains drivers — on retourne len(bulk) par défaut
+    return result.rowcount if result.rowcount >= 0 else len(bulk)
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=Page[EleveResponse])
@@ -179,8 +210,8 @@ async def list_eleves(
     db: DB,
     _: AdminUser,
     page: Pagination,
-    school_id:  Optional[uuid.UUID] = None,
-    session_id: Optional[uuid.UUID] = None,
+    school_id:  Optional[uuid_module.UUID] = None,
+    session_id: Optional[uuid_module.UUID] = None,
     classe:     Optional[str]       = None,
 ) -> Page[EleveResponse]:
     base = select(Eleve).order_by(Eleve.nom)
@@ -206,7 +237,7 @@ async def create_eleve(body: EleveCreate, db: DB, _: AdminUser) -> EleveResponse
 
 
 @router.patch("/{eleve_id}", response_model=EleveResponse)
-async def update_eleve(eleve_id: uuid.UUID, body: EleveUpdate, db: DB, _: AdminUser) -> EleveResponse:
+async def update_eleve(eleve_id: uuid_module.UUID, body: EleveUpdate, db: DB, _: AdminUser) -> EleveResponse:
     result = await db.execute(select(Eleve).where(Eleve.id == eleve_id))
     eleve = result.scalar_one_or_none()
     if not eleve:
@@ -219,7 +250,7 @@ async def update_eleve(eleve_id: uuid.UUID, body: EleveUpdate, db: DB, _: AdminU
 
 
 @router.delete("/{eleve_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_eleve(eleve_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
+async def delete_eleve(eleve_id: uuid_module.UUID, db: DB, _: AdminUser) -> Response:
     result = await db.execute(select(Eleve).where(Eleve.id == eleve_id))
     eleve = result.scalar_one_or_none()
     if not eleve:
@@ -366,13 +397,7 @@ async def import_eleves(db: DB, _: AdminUser, file: UploadFile = File(...)) -> d
         rows, errors = _parse_csv(content)
         fmt = "CSV"
 
-    imported = 0
-    for kwargs in rows:
-        db.add(Eleve(**kwargs))
-        imported += 1
-
-    if imported:
-        await db.flush()
+    imported = await _bulk_insert(db, rows)
 
     return {
         "format":   fmt,
@@ -389,10 +414,5 @@ async def import_eleves_csv(db: DB, _: AdminUser, file: UploadFile = File(...)) 
     """Endpoint historique conservé pour compatibilité. Préférer /import."""
     content = await file.read()
     rows, errors = _parse_csv(content)
-    imported = 0
-    for kwargs in rows:
-        db.add(Eleve(**kwargs))
-        imported += 1
-    if imported:
-        await db.flush()
+    imported = await _bulk_insert(db, rows)
     return {"imported": imported, "errors": errors}
