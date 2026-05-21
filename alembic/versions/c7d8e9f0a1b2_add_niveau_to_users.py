@@ -1,7 +1,7 @@
 """add niveau to users
 
 Revision ID: c7d8e9f0a1b2
-Revises: f3a1c8e2b945
+Revises: e4f2a1b3c8d9
 Create Date: 2026-05-21
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "c7d8e9f0a1b2"
-down_revision = "f3a1c8e2b945"
+down_revision = "e4f2a1b3c8d9"
 branch_labels = None
 depends_on = None
 
