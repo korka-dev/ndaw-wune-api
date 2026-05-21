@@ -6,6 +6,8 @@ import io
 import uuid
 from typing import Optional
 
+import pdfplumber
+import openpyxl
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
@@ -17,6 +19,160 @@ from app.schemas.eleve import EleveCreate, EleveUpdate, EleveResponse
 
 router = APIRouter(prefix="/eleves", tags=["Admin — Élèves"])
 
+# ── Colonnes attendues (acceptées en plusieurs langues / variantes) ────────────
+# Clé = nom normalisé interne, valeurs = alias acceptés dans le fichier importé
+
+COL_ALIASES: dict[str, list[str]] = {
+    "nom":            ["nom", "name", "last_name", "lastname", "surname"],
+    "prenom":         ["prenom", "prénom", "firstname", "first_name", "given_name"],
+    "genre":          ["sexe", "genre", "sex", "gender"],
+    "date_naissance": ["date_naissance", "naissance", "date de naissance", "dob", "birthdate", "birth_date"],
+    "classe":         ["classe", "class", "level", "niveau"],
+    "statut":         ["statut", "status", "etat", "état"],
+}
+
+
+def _normalize_header(h: str) -> str:
+    return h.strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _map_headers(raw_headers: list[str]) -> dict[str, str]:
+    """
+    Retourne un dict {colonne_interne → header_original} pour les colonnes reconnues.
+    """
+    mapping: dict[str, str] = {}
+    for raw in raw_headers:
+        normalized = _normalize_header(raw)
+        for internal, aliases in COL_ALIASES.items():
+            if normalized in aliases and internal not in mapping:
+                mapping[internal] = raw
+                break
+    return mapping
+
+
+def _row_to_eleve_kwargs(row: dict[str, str], col_map: dict[str, str]) -> dict | None:
+    """Convertit une ligne brute en kwargs pour créer un Eleve. Retourne None si ligne invalide."""
+    def get(key: str) -> str:
+        return (row.get(col_map.get(key, ""), "") or "").strip()
+
+    nom    = get("nom")
+    classe = get("classe")
+    if not nom or not classe:
+        return None
+    return {
+        "nom":            nom,
+        "prenom":         get("prenom") or None,
+        "genre":          get("genre") or None,
+        "date_naissance": get("date_naissance") or None,
+        "classe":         classe,
+        "statut":         get("statut") or "actif",
+    }
+
+
+# ── Parsers ───────────────────────────────────────────────────────────────────
+
+def _parse_csv(content_bytes: bytes) -> tuple[list[dict], list[str]]:
+    """Extrait les lignes d'un fichier CSV. Retourne (rows, errors)."""
+    text = content_bytes.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    raw_headers = list(reader.fieldnames or [])
+    col_map = _map_headers(raw_headers)
+
+    if "nom" not in col_map or "classe" not in col_map:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Colonnes requises : 'nom' et 'classe'. Colonnes détectées : {raw_headers}",
+        )
+
+    rows, errors = [], []
+    for i, row in enumerate(reader, start=2):
+        kwargs = _row_to_eleve_kwargs(dict(row), col_map)
+        if kwargs is None:
+            errors.append(f"Ligne {i} : 'nom' ou 'classe' manquant — ligne ignorée.")
+        else:
+            rows.append(kwargs)
+    return rows, errors
+
+
+def _parse_xlsx(content_bytes: bytes) -> tuple[list[dict], list[str]]:
+    """Extrait les lignes d'un fichier Excel .xlsx."""
+    wb = openpyxl.load_workbook(io.BytesIO(content_bytes), read_only=True, data_only=True)
+    ws = wb.active
+
+    all_rows = list(ws.iter_rows(values_only=True))
+    if not all_rows:
+        raise HTTPException(status_code=422, detail="Le fichier Excel est vide.")
+
+    # La première ligne non vide sert d'en-têtes
+    raw_headers = [str(c) if c is not None else "" for c in all_rows[0]]
+    col_map = _map_headers(raw_headers)
+
+    if "nom" not in col_map or "classe" not in col_map:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Colonnes requises : 'nom' et 'classe'. Colonnes trouvées : {raw_headers}",
+        )
+
+    # Index → nom de colonne original
+    idx_to_col = {raw_headers.index(v): v for v in col_map.values() if v in raw_headers}
+
+    rows, errors = [], []
+    for i, raw_row in enumerate(all_rows[1:], start=2):
+        row_dict = {raw_headers[j]: str(v) if v is not None else "" for j, v in enumerate(raw_row) if j < len(raw_headers)}
+        kwargs = _row_to_eleve_kwargs(row_dict, col_map)
+        if kwargs is None:
+            # Ligne complètement vide → on l'ignore silencieusement
+            if all(not str(v or "").strip() for v in raw_row):
+                continue
+            errors.append(f"Ligne {i} : 'nom' ou 'classe' manquant — ligne ignorée.")
+        else:
+            rows.append(kwargs)
+    wb.close()
+    return rows, errors
+
+
+def _parse_pdf(content_bytes: bytes) -> tuple[list[dict], list[str]]:
+    """
+    Tente d'extraire un tableau d'élèves depuis un PDF avec pdfplumber.
+    Cherche sur chaque page la première table contenant les colonnes requises.
+    """
+    rows, errors = [], []
+    found = False
+
+    with pdfplumber.open(io.BytesIO(content_bytes)) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            tables = page.extract_tables()
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                # La première ligne du tableau = en-têtes
+                raw_headers = [str(c or "").strip() for c in table[0]]
+                col_map = _map_headers(raw_headers)
+                if "nom" not in col_map or "classe" not in col_map:
+                    continue  # Ce tableau ne correspond pas
+                found = True
+                for i, raw_row in enumerate(table[1:], start=2):
+                    row_dict = {raw_headers[j]: str(v or "").strip() for j, v in enumerate(raw_row) if j < len(raw_headers)}
+                    kwargs = _row_to_eleve_kwargs(row_dict, col_map)
+                    if kwargs is None:
+                        if all(not v for v in row_dict.values()):
+                            continue
+                        errors.append(f"Page {page_num}, ligne {i} : 'nom' ou 'classe' manquant.")
+                    else:
+                        rows.append(kwargs)
+
+    if not found:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Aucun tableau avec les colonnes 'nom' et 'classe' n'a été trouvé dans le PDF. "
+                "Vérifiez que votre PDF contient bien un tableau structuré."
+            ),
+        )
+    return rows, errors
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=Page[EleveResponse])
 async def list_eleves(
@@ -72,6 +228,49 @@ async def delete_eleve(eleve_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# ── Modèle de fichier (template) ──────────────────────────────────────────────
+
+@router.get("/template/csv")
+async def download_template_csv(_: AdminUser) -> StreamingResponse:
+    """Retourne un fichier CSV vide avec les bons en-têtes pour guider l'import."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["nom", "prenom", "sexe", "date_naissance", "classe", "statut"])
+    writer.writerow(["Diallo", "Aminata", "Fille", "2015-04-12", "CE2", "actif"])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=modele_eleves.csv"},
+    )
+
+
+@router.get("/template/xlsx")
+async def download_template_xlsx(_: AdminUser) -> StreamingResponse:
+    """Retourne un fichier Excel vide avec les bons en-têtes + une ligne exemple."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Élèves"
+
+    headers = ["nom", "prenom", "sexe", "date_naissance", "classe", "statut"]
+    ws.append(headers)
+    ws.append(["Diallo", "Aminata", "Fille", "2015-04-12", "CE2", "actif"])
+    ws.append(["Ndiaye", "Ibrahima", "Garçon", "2014-09-03", "CM1", "actif"])
+
+    # Largeurs de colonnes
+    for i, col in enumerate(headers, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 18
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.read()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=modele_eleves.xlsx"},
+    )
+
+
 # ── Export CSV ────────────────────────────────────────────────────────────────
 
 @router.get("/export/csv")
@@ -93,35 +292,107 @@ async def export_eleves_csv(db: DB, _: AdminUser) -> StreamingResponse:
     )
 
 
-# ── Import CSV ────────────────────────────────────────────────────────────────
+# ── Export Excel ──────────────────────────────────────────────────────────────
+
+@router.get("/export/xlsx")
+async def export_eleves_xlsx(db: DB, _: AdminUser) -> StreamingResponse:
+    items = (await db.execute(select(Eleve).order_by(Eleve.nom))).scalars().all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Élèves"
+
+    # En-têtes avec style
+    from openpyxl.styles import Font, PatternFill, Alignment
+    header_fill = PatternFill(start_color="1e6fbf", end_color="1e6fbf", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+
+    headers = ["Nom", "Prénom", "Sexe", "Date de naissance", "Classe", "Statut"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    # Données
+    for e in items:
+        ws.append([
+            e.nom,
+            e.prenom or "",
+            e.genre or "",
+            e.date_naissance or "",
+            e.classe,
+            e.statut,
+        ])
+
+    # Largeurs auto
+    col_widths = [20, 20, 10, 18, 10, 10]
+    for i, w in enumerate(col_widths, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.read()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=eleves.xlsx"},
+    )
+
+
+# ── Import unifié (CSV / Excel / PDF) ────────────────────────────────────────
+
+@router.post("/import")
+async def import_eleves(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Import d'élèves depuis un fichier CSV, Excel (.xlsx/.xls) ou PDF.
+    Détection automatique du format selon l'extension et le content-type.
+    Colonnes acceptées (insensible à la casse) :
+      nom / prenom / sexe / date_naissance / classe / statut
+    """
+    content = await file.read()
+    filename = (file.filename or "").lower()
+    mime = (file.content_type or "").lower()
+
+    # Détection du format
+    if filename.endswith(".xlsx") or filename.endswith(".xls") or "spreadsheet" in mime or "excel" in mime:
+        rows, errors = _parse_xlsx(content)
+        fmt = "Excel"
+    elif filename.endswith(".pdf") or mime == "application/pdf":
+        rows, errors = _parse_pdf(content)
+        fmt = "PDF"
+    else:
+        # Par défaut CSV (texte brut, .csv, .txt)
+        rows, errors = _parse_csv(content)
+        fmt = "CSV"
+
+    imported = 0
+    for kwargs in rows:
+        db.add(Eleve(**kwargs))
+        imported += 1
+
+    if imported:
+        await db.flush()
+
+    return {
+        "format":   fmt,
+        "imported": imported,
+        "skipped":  len(errors),
+        "errors":   errors[:50],  # max 50 erreurs retournées
+    }
+
+
+# ── Import CSV (rétrocompatibilité) ───────────────────────────────────────────
 
 @router.post("/import/csv")
 async def import_eleves_csv(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
-    content = (await file.read()).decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(content))
-    required = {"nom", "classe"}
-    if not required.issubset({f.lower().strip() for f in (reader.fieldnames or [])}):
-        raise HTTPException(status_code=422, detail="Colonnes requises : nom, classe")
-
+    """Endpoint historique conservé pour compatibilité. Préférer /import."""
+    content = await file.read()
+    rows, errors = _parse_csv(content)
     imported = 0
-    errors: list[str] = []
-    for i, row in enumerate(reader, start=2):
-        nom    = (row.get("nom") or "").strip()
-        classe = (row.get("classe") or "").strip()
-        if not nom or not classe:
-            errors.append(f"Ligne {i} : nom ou classe manquant.")
-            continue
-        eleve = Eleve(
-            nom=nom,
-            prenom=(row.get("prenom") or "").strip() or None,
-            classe=classe,
-            genre=(row.get("sexe") or row.get("genre") or "").strip() or None,
-            date_naissance=(row.get("date_naissance") or "").strip() or None,
-            statut=(row.get("statut") or "actif").strip(),
-        )
-        db.add(eleve)
+    for kwargs in rows:
+        db.add(Eleve(**kwargs))
         imported += 1
-
     if imported:
         await db.flush()
     return {"imported": imported, "errors": errors}

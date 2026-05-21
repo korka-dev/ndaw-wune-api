@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     APP_NAME: str = "ARED-NdawWune"
     APP_ENV: Literal["development", "production", "test"] = "development"
 
+    # ── Stockage des fichiers uploadés ────────────────────────────────────────
+    # En développement : ./uploads (relatif au répertoire de travail)
+    # En production VPS : /var/www/ndawwune/uploads (ou tout chemin monté)
+    UPLOADS_DIR: str = "./uploads"
+
     # ── Sécurité JWT ──────────────────────────────────────────────────────────
     SECRET_KEY: str
     ALGORITHM: str = "HS256"

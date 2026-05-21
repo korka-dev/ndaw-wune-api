@@ -63,6 +63,9 @@ services:
     # En développement uniquement — retirer en production
     volumes:
       - .:/app
+      # Volume persistant pour les fichiers uploadés (ressources pédagogiques)
+      - uploads_data:/app/uploads
 
 volumes:
   postgres_data:
+  uploads_data:

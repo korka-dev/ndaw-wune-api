@@ -9,3 +9,4 @@ from app.models.planning import PlanningSegment                # noqa: F401
 from app.models.seance import Seance, RapportProf, SeanceStatus  # noqa: F401
 from app.models.eleve import Eleve                               # noqa: F401
 from app.models.rapport_journalier import RapportJournalier      # noqa: F401
+from app.models.document import Document                          # noqa: F401
