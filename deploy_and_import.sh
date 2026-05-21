@@ -3,7 +3,7 @@
 # deploy_and_import.sh — Redéploie le backend NdawWune sur le VPS
 #                         et exécute l'import des élèves (une seule fois)
 #
-# Usage (depuis /home/ubuntu/ndawwune/backend/) :
+# Usage (depuis /home/ubuntu/ndawwune/) :
 #   ./deploy_and_import.sh                                    # redéploie seulement
 #   ./deploy_and_import.sh --import ~/eleves.xlsx             # redéploie + import
 #   ./deploy_and_import.sh --import ~/eleves.xlsx --dry-run   # test sans écrire
@@ -11,16 +11,15 @@
 # Prérequis sur le VPS :
 #   - Docker + Docker Compose installés
 #   - Le dépôt cloné dans /home/ubuntu/ndawwune/
-#   - Le fichier .env présent dans /home/ubuntu/ndawwune/backend/
+#   - Le fichier .env présent dans /home/ubuntu/ndawwune/
 # =============================================================================
 
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-# Dossier backend = là où ce script se trouve (contient docker-compose.yml + .env)
+# Tout est au même endroit : le script, docker-compose.yml, .env et le repo git
 BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Racine du dépôt = un niveau au-dessus (pour git pull)
-REPO_DIR="$(dirname "$BACKEND_DIR")"
+REPO_DIR="$BACKEND_DIR"
 
 EXCEL_FILE=""
 DRY_RUN=false
@@ -46,10 +45,9 @@ done
 
 # ── Vérifications préliminaires ───────────────────────────────────────────────
 header "ARED NdawWune — Déploiement VPS"
-echo -e "  Repo    : ${CYAN}${REPO_DIR}${NC}"
-echo -e "  Backend : ${CYAN}${BACKEND_DIR}${NC}"
+echo -e "  Dossier : ${CYAN}${BACKEND_DIR}${NC}"
 
-[[ -f "$BACKEND_DIR/.env" ]]        || error "Fichier .env absent dans $BACKEND_DIR"
+[[ -f "$BACKEND_DIR/.env" ]]               || error "Fichier .env absent dans $BACKEND_DIR"
 [[ -f "$BACKEND_DIR/docker-compose.yml" ]] || error "docker-compose.yml absent dans $BACKEND_DIR"
 command -v docker >/dev/null || error "Docker n'est pas installé."
 command -v git    >/dev/null || error "Git n'est pas installé."
