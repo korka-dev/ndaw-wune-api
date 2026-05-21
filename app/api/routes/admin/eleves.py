@@ -9,9 +9,9 @@ from typing import Optional
 
 import pdfplumber
 import openpyxl
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Body, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.deps import AdminUser, DB
@@ -257,6 +257,27 @@ async def delete_eleve(eleve_id: uuid_module.UUID, db: DB, _: AdminUser) -> Resp
         raise HTTPException(status_code=404, detail="Élève introuvable.")
     await db.delete(eleve)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("", status_code=status.HTTP_200_OK)
+async def bulk_delete_eleves(
+    db: DB,
+    _: AdminUser,
+    ids: list[uuid_module.UUID] = Body(..., embed=True),
+) -> dict:
+    """
+    Supprime plusieurs élèves en une seule requête.
+    Corps attendu : { "ids": ["uuid1", "uuid2", ...] }
+    """
+    if not ids:
+        raise HTTPException(status_code=422, detail="La liste d'IDs ne peut pas être vide.")
+    if len(ids) > 500:
+        raise HTTPException(status_code=422, detail="Maximum 500 élèves supprimables en une seule opération.")
+
+    result = await db.execute(
+        delete(Eleve).where(Eleve.id.in_(ids))
+    )
+    return {"deleted": result.rowcount}
 
 
 # ── Modèle de fichier (template) ──────────────────────────────────────────────
