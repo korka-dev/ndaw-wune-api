@@ -53,11 +53,11 @@ command -v docker >/dev/null || error "Docker n'est pas installé."
 command -v git    >/dev/null || error "Git n'est pas installé."
 
 # ── Étape 1 : git pull ────────────────────────────────────────────────────────
-# header "Étape 1/4 — Récupération du code"
-# cd "$REPO_DIR"
-# info "git pull origin main…"
-# git pull origin main
-# success "Code à jour"
+header "Étape 1/4 — Récupération du code"
+cd "$REPO_DIR"
+info "git pull origin main…"
+git pull origin main
+success "Code à jour"
 
 # ── Étape 2 : rebuild Docker ──────────────────────────────────────────────────
 header "Étape 2/4 — Rebuild et redémarrage"

@@ -149,7 +149,7 @@ def run_import(excel_path: str, env_path: str, dry_run: bool, docker_mode: bool 
     # 3. Session active
     print("🔎  Recherche de la session de programme active…")
     cur.execute(
-        "SELECT id, name FROM program_sessions WHERE is_active = TRUE ORDER BY created_at DESC LIMIT 1"
+        "SELECT id, name FROM program_sessions WHERE status = 'active' ORDER BY created_at DESC LIMIT 1"
     )
     session_row = cur.fetchone()
     if not session_row:
