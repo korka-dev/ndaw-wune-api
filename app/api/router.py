@@ -6,7 +6,7 @@ from app.api.routes.admin import (
     superviseurs, evaluateurs, eleves,
     suivi_seances, suivi_superviseurs,
     rapports_journalier as admin_rapports_journalier,
-    ressources,
+    ressources, classes,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -29,6 +29,7 @@ api_router.include_router(rapports.router,                 prefix="/admin")
 api_router.include_router(superviseurs.router,             prefix="/admin")
 api_router.include_router(evaluateurs.router,              prefix="/admin")
 api_router.include_router(eleves.router,                   prefix="/admin")
+api_router.include_router(classes.router,                  prefix="/admin")
 api_router.include_router(suivi_seances.router,            prefix="/admin")
 api_router.include_router(suivi_superviseurs.router,       prefix="/admin")
 api_router.include_router(ressources.router,               prefix="/admin")

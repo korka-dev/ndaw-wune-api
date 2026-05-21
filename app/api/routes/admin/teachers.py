@@ -38,10 +38,11 @@ async def export_teachers_csv(db: DB, _: AdminUser) -> StreamingResponse:
     )).scalars().all()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["nom", "telephone", "titre", "email", "classes"])
+    writer.writerow(["nom", "telephone", "titre", "email", "niveau", "classes"])
     for t in items:
         writer.writerow([
             t.name, t.phone or "", t.title or "", t.email or "",
+            "|".join(t.niveau or []),
             "|".join(t.classes or []),
         ])
     output.seek(0)
@@ -71,11 +72,15 @@ async def import_teachers_csv(db: DB, _: AdminUser, file: UploadFile = File(...)
         if not nom or (not phone and not email):
             errors.append(f"Ligne {i} : nom + (téléphone ou email) requis.")
             continue
+        niveau_raw  = (row.get("niveau") or "").strip()
+        niveau  = [n.strip() for n in niveau_raw.split("|")  if n.strip()] if niveau_raw  else []
         classes_raw = (row.get("classes") or "").strip()
         classes = [c.strip() for c in classes_raw.split("|") if c.strip()] if classes_raw else []
         body = UserCreate(name=nom, phone=phone, email=email,
                           title=(row.get("titre") or "").strip() or None,
-                          role=UserRole.enseignant, classes=classes or None)
+                          role=UserRole.enseignant,
+                          niveau=niveau or None,
+                          classes=classes or None)
         await user_service.create_user(db, body, force_role=UserRole.enseignant)
         imported += 1
     return {"imported": imported, "errors": errors}

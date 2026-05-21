@@ -54,6 +54,7 @@ class User(Base, UUIDMixin, TimestampMixin):
         ForeignKey("schools.id", ondelete="SET NULL"),
         nullable=True,
     )
+    niveau:  Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
     classes: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
 
     # ── Relations ─────────────────────────────────────────────────────────────

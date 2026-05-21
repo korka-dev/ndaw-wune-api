@@ -33,6 +33,7 @@ class UserCreate(BaseModel):
     password:  Optional[str]       = None
     role:      UserRole
     school_id: Optional[uuid.UUID] = None
+    niveau:    Optional[List[str]] = None
     classes:   Optional[List[str]] = None
 
     @field_validator("name")
@@ -64,6 +65,7 @@ class UserUpdate(BaseModel):
     password:  Optional[str]        = None
     status:    Optional[UserStatus] = None
     school_id: Optional[uuid.UUID]  = None
+    niveau:    Optional[List[str]]  = None
     classes:   Optional[List[str]]  = None
 
     @field_validator("phone")
@@ -89,6 +91,7 @@ class UserResponse(BaseModel):
     role:                UserRole
     status:              UserStatus
     school_id:           Optional[uuid.UUID]
+    niveau:              Optional[List[str]]
     classes:             Optional[List[str]]
     must_change_password: bool
     school:              Optional[SchoolBrief] = None
