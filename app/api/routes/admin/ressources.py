@@ -6,7 +6,7 @@ import mimetypes
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select, delete
 
@@ -109,7 +109,7 @@ async def download_document(doc_id: uuid.UUID, db: DB, _: AdminUser) -> FileResp
 # ── Suppression ────────────────────────────────────────────────────────────────
 
 @router.delete("/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_document(doc_id: uuid.UUID, db: DB, _: AdminUser) -> None:
+async def delete_document(doc_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
     result = await db.execute(select(Document).where(Document.id == doc_id))
     doc = result.scalar_one_or_none()
     if not doc:
@@ -124,3 +124,4 @@ async def delete_document(doc_id: uuid.UUID, db: DB, _: AdminUser) -> None:
 
     await db.execute(delete(Document).where(Document.id == doc_id))
     await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
