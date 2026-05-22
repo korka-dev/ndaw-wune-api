@@ -31,9 +31,9 @@ sys.path.insert(0, str(ROOT))
 
 # ── Forcer DATABASE_URL vers localhost AVANT tout import de app.core ─────────
 # (le .env contient POSTGRES_HOST=db qui est le nom de service Docker,
-#  non résolvable depuis l'hôte — on écrase avec localhost ici)
+#  non résolvable depuis l'hôte — on écrase avec localhost uniquement hors Docker)
 _DEFAULT_DB = "postgresql+asyncpg://ared_user:ared_secret@localhost:5432/ared_ndawune"
-if "DATABASE_URL" not in os.environ or "://db:" in os.environ.get("DATABASE_URL", ""):
+if not os.path.exists("/.dockerenv") and ("DATABASE_URL" not in os.environ or "://db:" in os.environ.get("DATABASE_URL", "")):
     os.environ["DATABASE_URL"] = os.environ.get("DATABASE_URL", _DEFAULT_DB).replace(
         "@db:", "@localhost:"
     )

@@ -7,8 +7,6 @@
 #        ./redeploy_and_import.sh
 #    • Redéployer + Importer un fichier Excel :
 #        ./redeploy_and_import.sh --import ~/LISTES_ELEVES.xlsx
-#    • Redéployer + Simuler l'import (dry-run) :
-#        ./redeploy_and_import.sh --import ~/LISTES_ELEVES.xlsx --dry-run
 # ==============================================================================
 
 set -euo pipefail
@@ -27,7 +25,6 @@ BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BACKEND_DIR"
 
 EXCEL_FILE=""
-DRY_RUN=false
 
 # ── Parsing des arguments ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -37,12 +34,8 @@ while [[ $# -gt 0 ]]; do
       EXCEL_FILE="$2"
       shift 2
       ;;
-    --dry-run)
-      DRY_RUN=true
-      shift
-      ;;
     *)
-      error "Argument inconnu : $1\nUsage : $0 [--import fichier.xlsx] [--dry-run]"
+      error "Argument inconnu : $1\nUsage : $0 [--import fichier.xlsx]"
       ;;
   esac
 done
@@ -105,42 +98,21 @@ fi
 CONTAINER_ID=$(docker compose ps -q backend)
 [[ -n "$CONTAINER_ID" ]] || error "Conteneur backend introuvable."
 
-# Vérifier que import_eleves.py existe localement
-IMPORT_SCRIPT="import_eleves.py"
-[[ -f "$IMPORT_SCRIPT" ]] || error "Le script d'import '$IMPORT_SCRIPT' est introuvable."
-
 EXCEL_BASENAME=$(basename "$EXCEL_FILE")
 CONTAINER_EXCEL="/tmp/${EXCEL_BASENAME}"
-CONTAINER_SCRIPT="/tmp/import_eleves.py"
 
-log "Copie des fichiers dans le conteneur..."
-docker cp "$EXCEL_FILE"    "${CONTAINER_ID}:${CONTAINER_EXCEL}"
-docker cp "$IMPORT_SCRIPT" "${CONTAINER_ID}:${CONTAINER_SCRIPT}"
+log "Copie du fichier Excel dans le conteneur..."
+docker cp "$EXCEL_FILE" "${CONTAINER_ID}:${CONTAINER_EXCEL}"
 
 log "Vérification des dépendances Python requises..."
 docker compose exec -T backend pip install --quiet pandas openpyxl psycopg2-binary python-dotenv
 
-DRY_FLAG=""
-if $DRY_RUN; then
-  DRY_FLAG="--dry-run"
-  warn "Lancement de l'import en mode SIMULATION (dry-run)..."
-else
-  log "Lancement de l'import réel des élèves dans la base PostgreSQL..."
-fi
+log "Lancement de l'import des élèves dans la base PostgreSQL via scripts/import_eleves.py..."
+docker compose exec -T backend python3 scripts/import_eleves.py "$CONTAINER_EXCEL"
 
-docker compose exec -T backend python3 "$CONTAINER_SCRIPT" \
-  --file "$CONTAINER_EXCEL" \
-  --env /app/.env \
-  --docker \
-  $DRY_FLAG
-
-log "Nettoyage des fichiers temporaires dans le conteneur..."
-docker compose exec -T backend rm -f "$CONTAINER_EXCEL" "$CONTAINER_SCRIPT"
+log "Nettoyage du fichier temporaire dans le conteneur..."
+docker compose exec -T backend rm -f "$CONTAINER_EXCEL"
 
 header "Déploiement & Import Terminés !"
-if $DRY_RUN; then
-  success "La simulation s'est déroulée avec succès. Aucune donnée n'a été modifiée."
-else
-  success "Le backend a été redéployé et les élèves ont été importés avec succès !"
-fi
+success "Le backend a été redéployé et les élèves ont été importés avec succès !"
 echo ""
