@@ -1,6 +1,7 @@
 import csv
 import io
 import uuid
+import openpyxl
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
@@ -127,3 +128,91 @@ async def delete_school(school_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
     await db.delete(school)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ── Import XLSX — format liste-élèves (IEF · COMMUNE · SCHOOL · …) ───────────
+
+@router.post("/import/xlsx")
+async def import_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Importe les écoles depuis un fichier Excel au format liste-élèves.
+    Colonnes utilisées : IEF · COMMUNE · SCHOOL
+    Les autres colonnes (enseignant, élève, etc.) sont ignorées.
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if not all_rows:
+        raise HTTPException(status_code=422, detail="Fichier Excel vide.")
+
+    # ── Mapper les colonnes ────────────────────────────────────────────────────
+    raw_header = all_rows[0]
+    header = [str(c).strip().lower() if c is not None else "" for c in raw_header]
+
+    COL: dict[str, list[str]] = {
+        "school":  ["school", "école", "ecole", "nom_ecole"],
+        "ief":     ["ief"],
+        "commune": ["commune", "city", "ville"],
+    }
+    col_idx: dict[str, int] = {}
+    for name, aliases in COL.items():
+        for alias in aliases:
+            if alias in header:
+                col_idx[name] = header.index(alias)
+                break
+
+    if "school" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail="Colonne 'SCHOOL' (nom de l'école) introuvable dans le fichier."
+        )
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Agréger les écoles uniques ─────────────────────────────────────────────
+    schools_map: dict[str, dict] = {}  # key = nom.upper()
+    for row in all_rows[1:]:
+        name_raw = col(row, "school")
+        if not name_raw:
+            continue
+        key = name_raw.upper()
+        if key not in schools_map:
+            schools_map[key] = {
+                "name":   name_raw,
+                "region": col(row, "ief") or None,
+                "city":   col(row, "commune") or None,
+            }
+
+    if not schools_map:
+        raise HTTPException(status_code=422, detail="Aucune école trouvée dans le fichier.")
+
+    # ── Charger les écoles existantes ──────────────────────────────────────────
+    existing = (await db.execute(select(School))).scalars().all()
+    existing_names: set[str] = {s.name.upper() for s in existing}
+
+    # ── Créer les nouvelles écoles en lot ──────────────────────────────────────
+    imported = 0
+    skipped  = 0
+    for key, info in schools_map.items():
+        if key in existing_names:
+            skipped += 1
+            continue
+        db.add(School(name=info["name"], region=info["region"], city=info["city"]))
+        existing_names.add(key)  # éviter doublons dans le même batch
+        imported += 1
+
+    if imported:
+        await db.commit()
+
+    return {"imported": imported, "skipped": skipped}

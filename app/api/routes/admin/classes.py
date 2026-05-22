@@ -118,3 +118,141 @@ async def delete_classe(classe_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
     obj = await _get_or_404(db, classe_id)
     await db.delete(obj)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ── Import XLSX — format liste-élèves (IEF · COMMUNE · SCHOOL · NIVEAU · Classe) ──
+
+import io as _io
+import openpyxl as _openpyxl
+from fastapi import File as _File, UploadFile as _UploadFile
+
+@router.post("/import/xlsx")
+async def import_classes_xlsx(db: DB, _: AdminUser, file: _UploadFile = _File(...)) -> dict:
+    """
+    Importe les classes depuis un fichier Excel au format liste-élèves.
+    Colonnes utilisées : SCHOOL · NIVEAU · Classe
+    Crée les écoles manquantes automatiquement.
+    """
+    content = await file.read()
+    try:
+        wb = _openpyxl.load_workbook(_io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if not all_rows:
+        raise HTTPException(status_code=422, detail="Fichier Excel vide.")
+
+    # ── Mapper les colonnes ────────────────────────────────────────────────────
+    raw_header = all_rows[0]
+    header = [str(c).strip().lower() if c is not None else "" for c in raw_header]
+
+    COL: dict[str, list[str]] = {
+        "school":  ["school", "école", "ecole", "nom_ecole"],
+        "niveau":  ["niveau", "level", "niveaux"],
+        "classe":  ["classe", "class"],
+        "ief":     ["ief"],
+        "commune": ["commune", "city", "ville"],
+    }
+    col_idx: dict[str, int] = {}
+    for cname, aliases in COL.items():
+        for alias in aliases:
+            if alias in header:
+                col_idx[cname] = header.index(alias)
+                break
+
+    if "school" not in col_idx or "classe" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail="Colonnes requises : 'SCHOOL' et 'Classe'."
+        )
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Étape 1 : Agréger les paires (school, classe, niveau) uniques ─────────
+    pairs: dict[tuple[str, str], dict] = {}   # key = (SCHOOL_UPPER, CLASSE_UPPER)
+    for row in all_rows[1:]:
+        school_name = col(row, "school")
+        classe_name = col(row, "classe")
+        niveau_name = col(row, "niveau")
+        if not school_name or not classe_name:
+            continue
+        key = (school_name.upper(), classe_name.upper())
+        if key not in pairs:
+            pairs[key] = {
+                "school":  school_name,
+                "classe":  classe_name,
+                "niveau":  niveau_name or "N/A",
+                "ief":     col(row, "ief") or None,
+                "commune": col(row, "commune") or None,
+            }
+
+    if not pairs:
+        raise HTTPException(status_code=422, detail="Aucune classe trouvée dans le fichier.")
+
+    # ── Étape 2 : Charger / créer les écoles ──────────────────────────────────
+    schools_db = (await db.execute(select(School))).scalars().all()
+    school_by_name: dict[str, School] = {s.name.upper(): s for s in schools_db}
+
+    needed_schools = {info["school"].upper() for info in pairs.values()}
+    new_schools: list[School] = []
+    for s_upper in needed_schools:
+        if s_upper not in school_by_name:
+            info = next(v for k, v in pairs.items() if k[0] == s_upper)
+            s_obj = School(name=info["school"], region=info["ief"], city=info["commune"])
+            db.add(s_obj)
+            new_schools.append(s_obj)
+
+    if new_schools:
+        await db.flush()
+        for s in new_schools:
+            await db.refresh(s)
+            school_by_name[s.name.upper()] = s
+
+    schools_created = len(new_schools)
+
+    # ── Étape 3 : Charger les classes existantes ───────────────────────────────
+    existing_classes = (await db.execute(
+        select(SchoolClasse.name, SchoolClasse.school_id)
+    )).all()
+    existing_set: set[tuple[str, str]] = {
+        (row.name.upper(), str(row.school_id)) for row in existing_classes
+    }
+
+    # ── Étape 4 : Créer les classes manquantes ─────────────────────────────────
+    imported = 0
+    skipped  = 0
+    errors: list[str] = []
+
+    for (school_upper, classe_upper), info in pairs.items():
+        school_obj = school_by_name.get(school_upper)
+        if not school_obj:
+            errors.append(f"École '{info['school']}' introuvable.")
+            continue
+        if (classe_upper, str(school_obj.id)) in existing_set:
+            skipped += 1
+            continue
+        db.add(SchoolClasse(
+            name=info["classe"],
+            niveau=info["niveau"],
+            school_id=school_obj.id,
+        ))
+        existing_set.add((classe_upper, str(school_obj.id)))
+        imported += 1
+
+    if imported or new_schools:
+        await db.flush()
+
+    return {
+        "imported":        imported,
+        "skipped":         skipped,
+        "schools_created": schools_created,
+        "errors":          errors,
+    }

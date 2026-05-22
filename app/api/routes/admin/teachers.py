@@ -91,17 +91,21 @@ async def import_teachers_csv(db: DB, _: AdminUser, file: UploadFile = File(...)
 
 # ── Import XLSX — format liste élèves (IEF, COMMUNE, SCHOOL, enseignant, NIVEAU, Classe, ...) ──
 
+_DEFAULT_PW_HASH = hash_password("P@sser123")  # calculé une seule fois au démarrage
+
 @router.post("/import/xlsx")
 async def import_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
     """
     Importe les enseignants depuis un fichier Excel au format liste-élèves.
     Colonnes attendues : IEF · COMMUNE · SCHOOL · enseignant · NIVEAU · Classe
-    (les colonnes élèves name / Sexe sont ignorées)
+    (les colonnes élève name / Sexe sont ignorées)
 
-    Pour chaque enseignant unique :
-      • L'école est retrouvée par nom (insensible à la casse) ou créée avec IEF+COMMUNE.
-      • Le compte enseignant est créé sans téléphone (l'admin peut le renseigner ensuite).
-      • Mot de passe par défaut : P@sser123 — must_change_password = True.
+    Stratégie batch pour tenir sur N lignes :
+      1. Lecture complète du fichier en mémoire (openpyxl read_only)
+      2. Agrégation Python pure → dict des enseignants uniques
+      3. Création des écoles manquantes en lot (1 flush)
+      4. Chargement des enseignants existants en 1 requête
+      5. Création des nouveaux enseignants en lot (flush toutes les 200 entités)
     """
     content = await file.read()
     try:
@@ -116,39 +120,45 @@ async def import_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
         raise HTTPException(status_code=422, detail="Fichier Excel vide.")
 
     # ── Mapper les colonnes ────────────────────────────────────────────────────
-    header = [str(c).strip().lower() if c is not None else "" for c in all_rows[0]]
+    raw_header = all_rows[0]
+    header = [str(c).strip().lower() if c is not None else "" for c in raw_header]
 
-    def col(row: tuple, name: str):
-        aliases = {
-            "ief":        ["ief"],
-            "commune":    ["commune"],
-            "school":     ["school", "école", "ecole"],
-            "enseignant": ["enseignant", "teacher", "prof"],
-            "niveau":     ["niveau", "level", "niveaux"],
-            "classe":     ["classe", "class"],
-        }
-        for alias in aliases.get(name, [name]):
-            try:
-                idx = header.index(alias)
-                v = row[idx]
-                return str(v).strip() if v is not None else ""
-            except ValueError:
-                continue
-        return ""
+    COL_ALIASES: dict[str, list[str]] = {
+        "ief":        ["ief"],
+        "commune":    ["commune"],
+        "school":     ["school", "école", "ecole"],
+        "enseignant": ["enseignant", "teacher", "prof"],
+        "niveau":     ["niveau", "level", "niveaux"],
+        "classe":     ["classe", "class"],
+    }
 
-    # ── Étape 1 : Agrégation par enseignant ───────────────────────────────────
-    # Clé : (school_name_upper, teacher_name_upper)
-    teachers_map: dict[tuple, dict] = {}
+    # Pré-calculer les indices une seule fois
+    col_idx: dict[str, int] = {}
+    for name, aliases in COL_ALIASES.items():
+        for alias in aliases:
+            if alias in header:
+                col_idx[name] = header.index(alias)
+                break
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Étape 1 : Agrégation pure Python — O(n) sur toutes les lignes ─────────
+    teachers_map: dict[tuple[str, str], dict] = {}
     for row in all_rows[1:]:
-        teacher_name = col(row, "enseignant")
-        school_name  = col(row, "school")
-        if not teacher_name or not school_name:
+        t_name = col(row, "enseignant")
+        s_name = col(row, "school")
+        if not t_name or not s_name:
             continue
-        key = (school_name.upper(), teacher_name.upper())
+        key = (s_name.upper(), t_name.upper())
         if key not in teachers_map:
             teachers_map[key] = {
-                "name":    teacher_name.title(),  # ex: "Astou Seck"
-                "school":  school_name,
+                "name":    t_name.title(),
+                "school":  s_name,
                 "ief":     col(row, "ief"),
                 "commune": col(row, "commune"),
                 "niveaux": set(),
@@ -164,65 +174,94 @@ async def import_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
     if not teachers_map:
         raise HTTPException(
             status_code=422,
-            detail="Aucun enseignant trouvé. Vérifiez que le fichier contient les colonnes 'enseignant' et 'SCHOOL'.",
+            detail=(
+                "Aucun enseignant trouvé. Vérifiez que le fichier contient "
+                "les colonnes 'enseignant' et 'SCHOOL'."
+            ),
         )
 
-    # ── Étape 2 : Cache écoles existantes ─────────────────────────────────────
+    # ── Étape 2 : Charger toutes les écoles existantes (1 requête) ────────────
     schools_db = (await db.execute(select(School))).scalars().all()
     school_by_name: dict[str, School] = {s.name.upper(): s for s in schools_db}
 
-    schools_created = 0
-    imported        = 0
-    skipped         = 0
-    errors: list[str] = []
-
-    # ── Étape 3 : Itérer les enseignants ──────────────────────────────────────
-    for (school_upper, teacher_upper), info in teachers_map.items():
-
-        # — Trouver ou créer l'école —
-        school_obj = school_by_name.get(school_upper)
-        if school_obj is None:
+    # ── Étape 3 : Créer les écoles manquantes en LOT ──────────────────────────
+    new_schools: list[School] = []
+    needed_school_names = {info["school"].upper() for info in teachers_map.values()}
+    for name_upper in needed_school_names:
+        if name_upper not in school_by_name:
+            # Trouver l'info depuis le premier enseignant de cette école
+            info = next(v for k, v in teachers_map.items() if k[0] == name_upper)
             school_obj = School(
                 name=info["school"],
                 region=info["ief"] or None,
                 city=info["commune"] or None,
             )
             db.add(school_obj)
-            await db.flush()
-            await db.refresh(school_obj)
-            school_by_name[school_upper] = school_obj
-            schools_created += 1
+            new_schools.append(school_obj)
 
-        # — Vérifier si l'enseignant existe déjà (même nom + même école) —
-        existing = (await db.execute(
-            select(User).where(
-                func.upper(User.name) == teacher_upper,
-                User.school_id == school_obj.id,
-                User.role == UserRole.enseignant,
-            )
-        )).scalar_one_or_none()
+    if new_schools:
+        await db.flush()  # 1 seul flush pour toutes les nouvelles écoles
+        for s in new_schools:
+            await db.refresh(s)
+            school_by_name[s.name.upper()] = s
 
-        if existing:
+    schools_created = len(new_schools)
+
+    # ── Étape 4 : Charger les enseignants existants en 1 requête ──────────────
+    school_ids = [s.id for s in school_by_name.values()]
+    existing_teachers = (await db.execute(
+        select(User.name, User.school_id).where(
+            User.role == UserRole.enseignant,
+            User.school_id.in_(school_ids),
+        )
+    )).all()
+    existing_set: set[tuple[str, str]] = {
+        (row.name.upper(), str(row.school_id)) for row in existing_teachers
+    }
+
+    # ── Étape 5 : Créer les enseignants manquants en LOT (flush / 200) ────────
+    imported  = 0
+    skipped   = 0
+    errors: list[str] = []
+    batch_size = 200
+    pending    = 0
+
+    for (school_upper, teacher_upper), info in teachers_map.items():
+        school_obj = school_by_name.get(school_upper)
+        if school_obj is None:
+            errors.append(f"{info['name']} : école '{info['school']}' introuvable après création.")
+            continue
+
+        if (teacher_upper, str(school_obj.id)) in existing_set:
             skipped += 1
             continue
 
-        # — Créer le compte enseignant directement (sans phone/email) —
         try:
             user = User(
                 name=info["name"],
                 role=UserRole.enseignant,
                 status=UserStatus.actif,
-                password_hash=hash_password("P@sser123"),
+                password_hash=_DEFAULT_PW_HASH,
                 must_change_password=True,
                 school_id=school_obj.id,
                 niveau=sorted(info["niveaux"]) if info["niveaux"] else None,
                 classes=sorted(info["classes"]) if info["classes"] else None,
             )
             db.add(user)
-            await db.flush()
+            # Marquer comme vu pour éviter les doublons dans le même batch
+            existing_set.add((teacher_upper, str(school_obj.id)))
+            pending += 1
             imported += 1
+
+            if pending >= batch_size:
+                await db.flush()
+                pending = 0
+
         except Exception as exc:
             errors.append(f"{info['name']} ({info['school']}) : {exc}")
+
+    if pending:
+        await db.flush()  # flush du dernier batch
 
     return {
         "imported":        imported,

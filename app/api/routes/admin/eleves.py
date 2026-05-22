@@ -458,3 +458,106 @@ async def import_eleves_csv(db: DB, _: AdminUser, file: UploadFile = File(...)) 
     rows, errors = _parse_csv(content)
     imported = await _bulk_insert(db, rows)
     return {"imported": imported, "errors": errors}
+
+
+# ── Import XLSX — format liste-élèves avec liaison école ─────────────────────
+
+@router.post("/import/xlsx")
+async def import_eleves_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Importe les élèves depuis un fichier Excel au format liste-élèves ARED.
+    Colonnes utilisées : name · Sexe · Classe · NIVEAU · SCHOOL
+    Lie automatiquement chaque élève à son école via la colonne SCHOOL.
+    Les écoles doivent exister au préalable (sinon l'élève est ignoré).
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if not all_rows:
+        raise HTTPException(status_code=422, detail="Fichier Excel vide.")
+
+    # ── Mapper les colonnes ────────────────────────────────────────────────────
+    raw_header = all_rows[0]
+    header = [str(c).strip().lower() if c is not None else "" for c in raw_header]
+
+    COL: dict[str, list[str]] = {
+        "nom":    ["name", "nom", "last_name", "prenom_nom"],
+        "prenom": ["prenom", "prénom", "firstname", "first_name"],
+        "genre":  ["sexe", "genre", "sex", "gender"],
+        "classe": ["classe", "class"],
+        "niveau": ["niveau", "level"],
+        "school": ["school", "école", "ecole"],
+    }
+    col_idx: dict[str, int] = {}
+    for cname, aliases in COL.items():
+        for alias in aliases:
+            if alias in header:
+                col_idx[cname] = header.index(alias)
+                break
+
+    if "nom" not in col_idx or "classe" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail="Colonnes requises : 'name' (ou 'nom') et 'Classe'."
+        )
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Charger toutes les écoles existantes (1 requête) ──────────────────────
+    from app.models.school import School as SchoolModel
+    schools_db = (await db.execute(select(SchoolModel))).scalars().all()
+    school_by_name: dict[str, uuid_module.UUID] = {
+        s.name.upper(): s.id for s in schools_db
+    }
+
+    # ── Parser toutes les lignes ───────────────────────────────────────────────
+    from datetime import datetime, timezone as _tz
+    rows_to_insert: list[dict] = []
+    errors: list[str] = []
+    no_school_warned: set[str] = set()
+
+    for i, row in enumerate(all_rows[1:], start=2):
+        # Ligne vide → ignorer silencieusement
+        if all(not str(v or "").strip() for v in row):
+            continue
+
+        nom    = col(row, "nom")
+        classe = col(row, "classe")
+        if not nom or not classe:
+            errors.append(f"Ligne {i} : nom ou classe manquant — ignoré.")
+            continue
+
+        school_name  = col(row, "school")
+        school_id    = school_by_name.get(school_name.upper()) if school_name else None
+        if school_name and not school_id and school_name.upper() not in no_school_warned:
+            no_school_warned.add(school_name.upper())
+            errors.append(f"École '{school_name}' introuvable — élèves rattachés sans école.")
+
+        rows_to_insert.append({
+            "nom":       nom,
+            "prenom":    col(row, "prenom") or None,
+            "genre":     col(row, "genre")  or None,
+            "classe":    classe,
+            "statut":    "actif",
+            "school_id": school_id,
+        })
+
+    imported = await _bulk_insert(db, rows_to_insert)
+
+    return {
+        "format":   "Excel (liste-élèves)",
+        "imported": imported,
+        "skipped":  len(errors),
+        "errors":   errors[:50],
+    }
