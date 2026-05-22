@@ -214,15 +214,30 @@ async def list_eleves(
     page: Pagination,
     school_id:  Optional[uuid_module.UUID] = None,
     session_id: Optional[uuid_module.UUID] = None,
-    classe:     Optional[str]       = None,
+    classe:     Optional[str] = None,
+    search:     Optional[str] = None,   # filtre nom/prénom
+    ief:        Optional[str] = None,   # filtre par région (school.region)
 ) -> Page[EleveResponse]:
-    base = select(Eleve).order_by(Eleve.nom)
+    from sqlalchemy.orm import joinedload
+    from app.models.school import School as SchoolModel
+
+    # Jointure école nécessaire si on filtre par IEF
+    if ief:
+        base = select(Eleve).join(SchoolModel, Eleve.school_id == SchoolModel.id)\
+                            .where(SchoolModel.region == ief)\
+                            .order_by(Eleve.nom)
+    else:
+        base = select(Eleve).order_by(Eleve.nom)
+
     if school_id:
         base = base.where(Eleve.school_id == school_id)
     if session_id:
         base = base.where(Eleve.session_id == session_id)
     if classe:
         base = base.where(Eleve.classe == classe)
+    if search:
+        term = f"%{search.strip()}%"
+        base = base.where(or_(Eleve.nom.ilike(term), Eleve.prenom.ilike(term)))
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     items_orm = (await db.execute(

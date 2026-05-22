@@ -5,9 +5,9 @@ import io
 import uuid
 
 import openpyxl
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Body, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
@@ -53,6 +53,54 @@ async def export_teachers_csv(db: DB, _: AdminUser) -> StreamingResponse:
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=enseignants.csv"},
+    )
+
+
+# ── Export Excel ──────────────────────────────────────────────────────────────
+
+@router.get("/export/xlsx")
+async def export_teachers_xlsx(db: DB, _: AdminUser) -> StreamingResponse:
+    items = (await db.execute(
+        select(User).where(User.role == UserRole.enseignant).order_by(User.name)
+    )).scalars().all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Enseignants"
+
+    from openpyxl.styles import Font, PatternFill, Alignment
+    header_fill = PatternFill(start_color="1e6fbf", end_color="1e6fbf", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+
+    headers = ["Nom Complet", "Téléphone", "Titre / Fonction", "Email", "Niveaux", "Classes", "Statut"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for t in items:
+        ws.append([
+            t.name,
+            t.phone or "",
+            t.title or "",
+            t.email or "",
+            ", ".join(t.niveau or []),
+            ", ".join(t.classes or []),
+            t.status,
+        ])
+
+    col_widths = [25, 18, 20, 25, 20, 20, 12]
+    for i, w in enumerate(col_widths, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.read()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=enseignants.xlsx"},
     )
 
 
@@ -281,6 +329,30 @@ async def get_teacher(teacher_id: uuid.UUID, db: DB, _: AdminUser) -> UserRespon
 @router.patch("/{teacher_id}", response_model=UserResponse)
 async def update_teacher(teacher_id: uuid.UUID, body: UserUpdate, db: DB, _: AdminUser) -> UserResponse:
     return await user_service.update_user(db, teacher_id, body)
+
+
+@router.delete("", status_code=status.HTTP_200_OK)
+async def bulk_delete_teachers(
+    db: DB,
+    current_user: AdminUser,
+    ids: list[uuid.UUID] = Body(..., embed=True),
+) -> dict:
+    """
+    Supprime plusieurs enseignants en une seule requête.
+    Corps attendu : { "ids": ["uuid1", "uuid2", ...] }
+    """
+    if not ids:
+        raise HTTPException(status_code=422, detail="La liste d'IDs ne peut pas être vide.")
+    if len(ids) > 500:
+        raise HTTPException(status_code=422, detail="Maximum 500 enseignants supprimables en une seule opération.")
+    # Empêcher l'auto-suppression
+    ids_filtered = [i for i in ids if i != current_user.id]
+    from app.models.user import User
+    result = await db.execute(
+        delete(User).where(User.id.in_(ids_filtered))
+    )
+    await db.commit()
+    return {"deleted": result.rowcount}
 
 
 @router.delete("/{teacher_id}", status_code=status.HTTP_204_NO_CONTENT)
