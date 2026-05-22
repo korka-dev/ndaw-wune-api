@@ -4,13 +4,16 @@ import csv
 import io
 import uuid
 
+import openpyxl
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
-from app.models.user import User, UserRole
+from app.core.security import hash_password
+from app.models.school import School
+from app.models.user import User, UserRole, UserStatus
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.services import user_service
 
@@ -84,6 +87,149 @@ async def import_teachers_csv(db: DB, _: AdminUser, file: UploadFile = File(...)
         await user_service.create_user(db, body, force_role=UserRole.enseignant)
         imported += 1
     return {"imported": imported, "errors": errors}
+
+
+# ── Import XLSX — format liste élèves (IEF, COMMUNE, SCHOOL, enseignant, NIVEAU, Classe, ...) ──
+
+@router.post("/import/xlsx")
+async def import_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Importe les enseignants depuis un fichier Excel au format liste-élèves.
+    Colonnes attendues : IEF · COMMUNE · SCHOOL · enseignant · NIVEAU · Classe
+    (les colonnes élèves name / Sexe sont ignorées)
+
+    Pour chaque enseignant unique :
+      • L'école est retrouvée par nom (insensible à la casse) ou créée avec IEF+COMMUNE.
+      • Le compte enseignant est créé sans téléphone (l'admin peut le renseigner ensuite).
+      • Mot de passe par défaut : P@sser123 — must_change_password = True.
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if not all_rows:
+        raise HTTPException(status_code=422, detail="Fichier Excel vide.")
+
+    # ── Mapper les colonnes ────────────────────────────────────────────────────
+    header = [str(c).strip().lower() if c is not None else "" for c in all_rows[0]]
+
+    def col(row: tuple, name: str):
+        aliases = {
+            "ief":        ["ief"],
+            "commune":    ["commune"],
+            "school":     ["school", "école", "ecole"],
+            "enseignant": ["enseignant", "teacher", "prof"],
+            "niveau":     ["niveau", "level", "niveaux"],
+            "classe":     ["classe", "class"],
+        }
+        for alias in aliases.get(name, [name]):
+            try:
+                idx = header.index(alias)
+                v = row[idx]
+                return str(v).strip() if v is not None else ""
+            except ValueError:
+                continue
+        return ""
+
+    # ── Étape 1 : Agrégation par enseignant ───────────────────────────────────
+    # Clé : (school_name_upper, teacher_name_upper)
+    teachers_map: dict[tuple, dict] = {}
+    for row in all_rows[1:]:
+        teacher_name = col(row, "enseignant")
+        school_name  = col(row, "school")
+        if not teacher_name or not school_name:
+            continue
+        key = (school_name.upper(), teacher_name.upper())
+        if key not in teachers_map:
+            teachers_map[key] = {
+                "name":    teacher_name.title(),  # ex: "Astou Seck"
+                "school":  school_name,
+                "ief":     col(row, "ief"),
+                "commune": col(row, "commune"),
+                "niveaux": set(),
+                "classes": set(),
+            }
+        niv = col(row, "niveau")
+        cls = col(row, "classe")
+        if niv:
+            teachers_map[key]["niveaux"].add(niv)
+        if cls:
+            teachers_map[key]["classes"].add(cls)
+
+    if not teachers_map:
+        raise HTTPException(
+            status_code=422,
+            detail="Aucun enseignant trouvé. Vérifiez que le fichier contient les colonnes 'enseignant' et 'SCHOOL'.",
+        )
+
+    # ── Étape 2 : Cache écoles existantes ─────────────────────────────────────
+    schools_db = (await db.execute(select(School))).scalars().all()
+    school_by_name: dict[str, School] = {s.name.upper(): s for s in schools_db}
+
+    schools_created = 0
+    imported        = 0
+    skipped         = 0
+    errors: list[str] = []
+
+    # ── Étape 3 : Itérer les enseignants ──────────────────────────────────────
+    for (school_upper, teacher_upper), info in teachers_map.items():
+
+        # — Trouver ou créer l'école —
+        school_obj = school_by_name.get(school_upper)
+        if school_obj is None:
+            school_obj = School(
+                name=info["school"],
+                region=info["ief"] or None,
+                city=info["commune"] or None,
+            )
+            db.add(school_obj)
+            await db.flush()
+            await db.refresh(school_obj)
+            school_by_name[school_upper] = school_obj
+            schools_created += 1
+
+        # — Vérifier si l'enseignant existe déjà (même nom + même école) —
+        existing = (await db.execute(
+            select(User).where(
+                func.upper(User.name) == teacher_upper,
+                User.school_id == school_obj.id,
+                User.role == UserRole.enseignant,
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            skipped += 1
+            continue
+
+        # — Créer le compte enseignant directement (sans phone/email) —
+        try:
+            user = User(
+                name=info["name"],
+                role=UserRole.enseignant,
+                status=UserStatus.actif,
+                password_hash=hash_password("P@sser123"),
+                must_change_password=True,
+                school_id=school_obj.id,
+                niveau=sorted(info["niveaux"]) if info["niveaux"] else None,
+                classes=sorted(info["classes"]) if info["classes"] else None,
+            )
+            db.add(user)
+            await db.flush()
+            imported += 1
+        except Exception as exc:
+            errors.append(f"{info['name']} ({info['school']}) : {exc}")
+
+    return {
+        "imported":        imported,
+        "skipped":         skipped,
+        "schools_created": schools_created,
+        "errors":          errors,
+    }
 
 
 # ── Routes paramétrées — après les routes fixes ──────────────────────────────
