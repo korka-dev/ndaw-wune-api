@@ -11,12 +11,14 @@ import pdfplumber
 import openpyxl
 from fastapi import APIRouter, Body, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
 from app.models.eleve import Eleve
+from app.models.school import School
 from app.schemas.eleve import EleveCreate, EleveUpdate, EleveResponse
 
 router = APIRouter(prefix="/eleves", tags=["Admin — Élèves"])
@@ -223,7 +225,26 @@ async def list_eleves(
         base = base.where(Eleve.classe == classe)
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
-    items = (await db.execute(base.offset(page.skip).limit(page.limit))).scalars().all()
+    items_orm = (await db.execute(
+        base.options(selectinload(Eleve.school)).offset(page.skip).limit(page.limit)
+    )).scalars().all()
+
+    items = [
+        EleveResponse(
+            id=e.id,
+            nom=e.nom,
+            prenom=e.prenom,
+            classe=e.classe,
+            genre=e.genre,
+            date_naissance=e.date_naissance,
+            statut=e.statut,
+            school_id=e.school_id,
+            session_id=e.session_id,
+            school_name=e.school.name if e.school else None,
+            school_region=e.school.region if e.school else None,
+        )
+        for e in items_orm
+    ]
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 

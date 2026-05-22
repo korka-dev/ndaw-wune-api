@@ -77,8 +77,9 @@ class UserUpdate(BaseModel):
 # ── Réponse ───────────────────────────────────────────────────────────────────
 
 class SchoolBrief(BaseModel):
-    id:   uuid.UUID
-    name: str
+    id:     uuid.UUID
+    name:   str
+    region: Optional[str] = None
     model_config = {"from_attributes": True}
 
 

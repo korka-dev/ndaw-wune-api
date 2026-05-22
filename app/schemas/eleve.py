@@ -41,5 +41,7 @@ class EleveResponse(BaseModel):
     statut:         str                 = "actif"
     school_id:      Optional[uuid.UUID]
     session_id:     Optional[uuid.UUID]
+    school_name:    Optional[str]       = None  # nom de l'école (joint)
+    school_region:  Optional[str]       = None  # IEF / région (joint)
 
     model_config = {"from_attributes": True}
