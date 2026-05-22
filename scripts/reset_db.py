@@ -36,8 +36,8 @@ from app.models.eleve import Eleve
 from app.models.seance import Seance
 from app.models.rapport_journalier import RapportJournalier
 from app.models.document import Document
-from app.models.planning import Planning
-from app.models.session import Session
+from app.models.planning import PlanningSegment
+from app.models.session import ProgramSession, TeacherSession
 
 
 async def reset_db() -> None:
@@ -76,23 +76,27 @@ async def reset_db() -> None:
             print(f"  ✓ {res.rowcount} documents supprimés.")
             
             # 5. Supprimer les plannings
-            res = await session.execute(delete(Planning))
+            res = await session.execute(delete(PlanningSegment))
             print(f"  ✓ {res.rowcount} plannings supprimés.")
             
             # 6. Supprimer les classes
             res = await session.execute(delete(SchoolClasse))
             print(f"  ✓ {res.rowcount} classes supprimées.")
             
-            # 7. Supprimer tous les utilisateurs sauf les administrateurs
+            # 7. Supprimer les associations enseignants-sessions
+            res = await session.execute(delete(TeacherSession))
+            print(f"  ✓ {res.rowcount} associations enseignants-sessions supprimées.")
+            
+            # 8. Supprimer tous les utilisateurs sauf les administrateurs
             res = await session.execute(delete(User).where(User.role != UserRole.admin))
             print(f"  ✓ {res.rowcount} utilisateurs (Enseignants, Superviseurs, Évaluateurs) supprimés.")
             
-            # 8. Supprimer les écoles
+            # 9. Supprimer les écoles
             res = await session.execute(delete(School))
             print(f"  ✓ {res.rowcount} écoles supprimées.")
             
-            # 9. Supprimer les sessions de programme
-            res = await session.execute(delete(Session))
+            # 10. Supprimer les sessions de programme
+            res = await session.execute(delete(ProgramSession))
             print(f"  ✓ {res.rowcount} sessions de programme supprimées.")
             
             await session.commit()
