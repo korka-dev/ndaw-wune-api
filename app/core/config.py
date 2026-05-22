@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # ── Pagination ────────────────────────────────────────────────────────────
     DEFAULT_PAGE_SIZE: int = 50
-    MAX_PAGE_SIZE: int = 1000
+    MAX_PAGE_SIZE: int = 10000
 
     # ── Mot de passe par défaut (comptes créés par l'admin) ───────────────────
     # Tous les nouveaux comptes reçoivent ce mot de passe temporaire.
