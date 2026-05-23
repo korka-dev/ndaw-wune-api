@@ -1,6 +1,9 @@
 """
-Endpoints Admin — Superviseurs (rôle coordonnateur).
-Les superviseurs suivent les enseignants sur le terrain.
+Endpoints Admin — Superviseurs de terrain (rôle superviseur).
+Les superviseurs suivent les enseignants sur le terrain depuis l'app mobile.
+
+Rétrocompatibilité : la liste inclut les anciens enregistrements stockés
+avec le rôle 'coordonnateur' (avant la migration a9f1b2c3d4e5).
 """
 from __future__ import annotations
 
@@ -10,6 +13,8 @@ from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from sqlalchemy import or_
+
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
 from app.models.user import User, UserRole
@@ -18,16 +23,35 @@ from app.services import user_service
 
 router = APIRouter(prefix="/superviseurs", tags=["Admin — Superviseurs"])
 
+# Rôles considérés comme "superviseur" (rétrocompat : anciens comptes coordonnateur)
+_SUPERVISEUR_ROLES = (UserRole.superviseur, UserRole.coordonnateur)
+
 
 @router.get("", response_model=Page[UserResponse])
 async def list_superviseurs(db: DB, _: AdminUser, page: Pagination) -> Page[UserResponse]:
-    total, items = await user_service.list_by_role(db, UserRole.coordonnateur, page.skip, page.limit)
+    """Liste les superviseurs (rôle superviseur + anciens coordonnateurs non-évaluateurs)."""
+    from sqlalchemy import func, select
+    base = (
+        select(User)
+        .where(
+            or_(
+                User.role == UserRole.superviseur,
+                # Rétrocompat : coordonnateurs qui n'ont pas encore été migrés
+                # et qui ne sont pas des évaluateurs
+                (User.role == UserRole.coordonnateur) & (User.title != "evaluateur"),
+            )
+        )
+        .order_by(User.name)
+    )
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    items = (await db.execute(base.offset(page.skip).limit(page.limit))).scalars().all()
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_superviseur(body: UserCreate, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.create_user(db, body, force_role=UserRole.coordonnateur)
+    """Crée un superviseur avec le rôle 'superviseur' (app mobile — onglets superviseur)."""
+    return await user_service.create_user(db, body, force_role=UserRole.superviseur)
 
 
 @router.get("/{superviseur_id}", response_model=UserResponse)

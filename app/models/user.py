@@ -16,6 +16,7 @@ class UserRole(str, enum.Enum):
     admin         = "admin"
     coordonnateur = "coordonnateur"
     enseignant    = "enseignant"
+    superviseur   = "superviseur"   # rôle mobile — suivi terrain des enseignants
 
 
 class UserStatus(str, enum.Enum):

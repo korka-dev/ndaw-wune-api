@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.core.deps import AdminUser, DB
 from app.models.user import User, UserRole
@@ -42,9 +42,16 @@ async def list_suivi_superviseurs(
     search:     Optional[str]       = None,
 ) -> list[SuiviSuperviseurItem]:
     """Liste tous les superviseurs avec le nombre d'enseignants qui leur sont assignés."""
+    # Inclut le nouveau rôle 'superviseur' ET les anciens 'coordonnateur' non-évaluateurs
+    # (rétrocompatibilité avant la migration a9f1b2c3d4e5)
     q = (
         select(User)
-        .where(User.role == UserRole.coordonnateur, User.title != "evaluateur")
+        .where(
+            or_(
+                User.role == UserRole.superviseur,
+                (User.role == UserRole.coordonnateur) & (User.title != "evaluateur"),
+            )
+        )
         .order_by(User.name)
     )
     if search:

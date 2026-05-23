@@ -1,9 +1,12 @@
-"""Endpoints App mobile — Rapports Journaliers (soumission par le tuteur)."""
+"""Endpoints App mobile — Rapports Journaliers (soumission par le tuteur/superviseur).
+
+Accessible aux enseignants ET aux superviseurs (MobileUser).
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.core.deps import DB, TeacherUser
+from app.core.deps import DB, MobileUser
 from app.core.pagination import Page, Pagination
 from app.models.rapport_journalier import RapportJournalier
 from app.schemas.rapport_journalier import RapportJournalierCreate, RapportJournalierResponse
@@ -15,10 +18,10 @@ router = APIRouter(prefix="/rapports/journalier", tags=["App — Rapports Journa
 @router.post("", response_model=RapportJournalierResponse, status_code=status.HTTP_201_CREATED)
 async def submit_rapport_journalier(
     body: RapportJournalierCreate,
-    current_user: TeacherUser,
+    current_user: MobileUser,
     db: DB,
 ) -> RapportJournalierResponse:
-    """Soumet un rapport journalier depuis l'app mobile (online ou offline)."""
+    """Soumet un rapport journalier depuis l'app mobile (enseignant ou superviseur, online/offline)."""
     rapport = RapportJournalier(teacher_id=current_user.id, **body.model_dump())
     db.add(rapport)
     await db.flush()
@@ -28,7 +31,7 @@ async def submit_rapport_journalier(
 
 @router.get("", response_model=Page[RapportJournalierResponse])
 async def list_rapports_journalier(
-    current_user: TeacherUser,
+    current_user: MobileUser,
     db: DB,
     page: Pagination,
 ) -> Page[RapportJournalierResponse]:

@@ -3,8 +3,9 @@ import io
 import logging
 import re
 import uuid
+from datetime import datetime as _dt
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
@@ -97,6 +98,88 @@ def _parse_csv(content: bytes) -> tuple[list[dict], list[dict]]:
                 "heure_debut": _h_to_colon(row["heure_debut"]),
                 "heure_fin":   _h_to_colon(row["heure_fin"]),
                 "matiere":     row.get("matiere") or None,
+            })
+        except Exception as exc:
+            errors.append({"row": line_no, "error": str(exc)})
+
+    return segments, errors
+
+
+def _parse_excel(content: bytes) -> tuple[list[dict], list[dict]]:
+    """Retourne (segments, errors) depuis un fichier Excel (.xlsx, .xls) via openpyxl."""
+    import datetime
+
+    try:
+        import openpyxl
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="La bibliothèque openpyxl n'est pas installée sur le serveur.",
+        )
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        ws = wb.active
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Impossible de lire le fichier Excel : {e}",
+        )
+
+    all_rows = list(ws.iter_rows(values_only=True))
+    if not all_rows:
+        raise HTTPException(status_code=400, detail="Fichier Excel vide.")
+
+    header = [str(c).strip().lower() if c is not None else "" for c in all_rows[0]]
+    required = {"jour", "heure_debut", "heure_fin"}
+
+    if not required.issubset(set(h for h in header if h)):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Colonnes requises : {', '.join(sorted(required))}. "
+                   f"Colonnes trouvées : {[h for h in header if h]}",
+        )
+
+    def _cell_to_str(val) -> str:
+        """Convertit une valeur de cellule openpyxl en chaîne."""
+        if val is None:
+            return ""
+        if isinstance(val, datetime.time):
+            return val.strftime("%H:%M")
+        if isinstance(val, datetime.datetime):
+            return val.strftime("%H:%M")
+        return str(val).strip()
+
+    segments: list[dict] = []
+    errors:   list[dict] = []
+
+    for line_no, row in enumerate(all_rows[1:], start=2):
+        try:
+            row_dict = {
+                header[i]: _cell_to_str(v)
+                for i, v in enumerate(row)
+                if i < len(header) and header[i]
+            }
+
+            raw_jour  = row_dict.get("jour", "")
+            raw_debut = row_dict.get("heure_debut", "")
+            raw_fin   = row_dict.get("heure_fin", "")
+            raw_mat   = row_dict.get("matiere", "") or None
+
+            # Sauter les lignes vides
+            if not raw_jour or not raw_debut or not raw_fin or raw_jour.lower() in ("none", "nan"):
+                continue
+
+            # Gérer "1.0" → "1" pour les jours numériques issus d'Excel
+            if raw_jour.endswith(".0"):
+                raw_jour = raw_jour[:-2]
+
+            jour = _parse_jour(raw_jour)
+            segments.append({
+                "jour":        jour,
+                "heure_debut": _h_to_colon(raw_debut),
+                "heure_fin":   _h_to_colon(raw_fin),
+                "matiere":     raw_mat if raw_mat and raw_mat.lower() not in ("none", "nan") else None,
             })
         except Exception as exc:
             errors.append({"row": line_no, "error": str(exc)})
@@ -275,10 +358,10 @@ async def import_planning(
     file: UploadFile = File(...),
 ):
     """
-    Importe un planning depuis un fichier PDF ou CSV.
+    Importe un planning depuis un fichier PDF, Excel ou CSV.
 
     • PDF : emploi du temps Ndaw Wune (jours en majuscules, créneaux 16h00-16h05)
-    • CSV : colonnes jour, heure_debut, heure_fin, matiere
+    • Excel / CSV : colonnes jour, heure_debut, heure_fin, matiere
 
     Retourne { imported: N, errors: [{row, error}] }
     """
@@ -287,23 +370,41 @@ async def import_planning(
     ctype    = (file.content_type or "").lower()
 
     is_pdf = filename.endswith(".pdf") or "pdf" in ctype
+    is_excel = filename.endswith(".xlsx") or filename.endswith(".xls") or "excel" in ctype or "officedocument.spreadsheetml" in ctype
 
     if is_pdf:
         segments, errors = _parse_pdf(content)
+    elif is_excel:
+        segments, errors = _parse_excel(content)
     else:
         segments, errors = _parse_csv(content)
+
+    # Supprimer l'ancien planning de la session (remplacement complet)
+    await db.execute(
+        delete(PlanningSegment).where(PlanningSegment.session_id == session_id)
+    )
 
     imported = 0
     for seg_data in segments:
         try:
+            # Les parseurs retournent des strings "HH:MM" — asyncpg exige datetime.time
+            seg_data["heure_debut"] = _dt.strptime(seg_data["heure_debut"], "%H:%M").time()
+            seg_data["heure_fin"]   = _dt.strptime(seg_data["heure_fin"],   "%H:%M").time()
             seg = PlanningSegment(session_id=session_id, **seg_data)
             db.add(seg)
             imported += 1
         except Exception as exc:
             errors.append({"row": "-", "error": str(exc)})
 
-    if imported:
+    try:
         await db.commit()
         await _invalidate_sync_caches()
+    except Exception as exc:
+        await db.rollback()
+        logger.error("[Planning Import] Erreur au commit : %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Erreur lors de la sauvegarde du planning. Veuillez réessayer.",
+        )
 
     return {"imported": imported, "errors": errors}

@@ -75,8 +75,34 @@ async def require_enseignant(
     return current_user
 
 
+async def require_superviseur(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Réservé aux superviseurs de terrain (app mobile — onglets superviseur)."""
+    if current_user.role != UserRole.superviseur:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès réservé aux superviseurs.",
+        )
+    return current_user
+
+
+async def require_mobile_user(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Autorise enseignants ET superviseurs — pour les endpoints partagés (ex: rapports journaliers)."""
+    if current_user.role not in (UserRole.enseignant, UserRole.superviseur):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès réservé aux utilisateurs de l'application mobile.",
+        )
+    return current_user
+
+
 # ── Aliases typés pour injection dans les routes ──────────────────────────────
-CurrentUser = Annotated[User, Depends(get_current_user)]
-AdminUser   = Annotated[User, Depends(require_admin)]
-TeacherUser = Annotated[User, Depends(require_enseignant)]
-DB          = Annotated[AsyncSession, Depends(get_db)]
+CurrentUser      = Annotated[User, Depends(get_current_user)]
+AdminUser        = Annotated[User, Depends(require_admin)]
+TeacherUser      = Annotated[User, Depends(require_enseignant)]
+SuperviseurUser  = Annotated[User, Depends(require_superviseur)]
+MobileUser       = Annotated[User, Depends(require_mobile_user)]
+DB               = Annotated[AsyncSession, Depends(get_db)]
