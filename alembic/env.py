@@ -35,7 +35,15 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # Chaque migration s'exécute dans sa propre transaction.
+        # Indispensable pour ALTER TYPE … ADD VALUE : PostgreSQL exige que
+        # la nouvelle valeur ENUM soit committée avant de pouvoir être utilisée
+        # dans un UPDATE (même session, connexion asyncpg).
+        transaction_per_migration=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
