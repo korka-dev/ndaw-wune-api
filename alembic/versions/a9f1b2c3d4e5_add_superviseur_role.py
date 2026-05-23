@@ -30,19 +30,27 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ── 1. Ajouter la valeur à l'ENUM (PostgreSQL 12+ : IF NOT EXISTS) ────────
-    op.execute("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'superviseur'")
+    # ── 1. Ajouter la valeur à l'ENUM hors transaction (AUTOCOMMIT) ───────────
+    # PostgreSQL exige que ALTER TYPE ... ADD VALUE soit commité avant que la
+    # nouvelle valeur puisse être utilisée dans la même session. On exécute
+    # donc cette commande en mode AUTOCOMMIT, puis l'UPDATE dans un second temps.
+    conn = op.get_bind()
+    conn.execution_options(isolation_level="AUTOCOMMIT").execute(
+        sa.text("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'superviseur'")
+    )
 
     # ── 2. Migrer les coordonnateurs ayant title='superviseur' ─────────────────
     # Ces utilisateurs étaient créés comme coordonnateurs mais utilisent l'app
     # mobile en tant que superviseurs de terrain.
     op.execute(
-        """
-        UPDATE users
-           SET role = 'superviseur'
-         WHERE role = 'coordonnateur'
-           AND title = 'superviseur'
-        """
+        sa.text(
+            """
+            UPDATE users
+               SET role = 'superviseur'
+             WHERE role = 'coordonnateur'
+               AND title = 'superviseur'
+            """
+        )
     )
 
 
