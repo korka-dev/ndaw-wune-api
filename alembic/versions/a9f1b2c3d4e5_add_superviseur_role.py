@@ -22,6 +22,12 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+# Variables obligatoires pour Alembic
+revision = 'a9f1b2c3d4e5'
+down_revision = 'f3a1c8e2b945'
+branch_labels = None
+depends_on = None
+
 
 def upgrade() -> None:
     # ── 1. Ajouter la valeur à l'ENUM (PostgreSQL 12+ : IF NOT EXISTS) ────────
