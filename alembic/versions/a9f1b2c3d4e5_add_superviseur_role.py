@@ -24,7 +24,7 @@ from alembic import op
 
 # Variables obligatoires pour Alembic
 revision = 'a9f1b2c3d4e5'
-down_revision = 'f3a1c8e2b945'
+down_revision = 'd8e9f0a1b2c3'
 branch_labels = None
 depends_on = None
 
