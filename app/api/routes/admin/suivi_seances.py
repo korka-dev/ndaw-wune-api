@@ -72,7 +72,8 @@ class SuiviSeanceItem(BaseModel):
     total_seances:      int                = 0
     seances_terminees:  int                = 0
     seances_en_cours:   int                = 0
-    derniere_activite:  Optional[str]      = None
+    derniere_activite:  Optional[str]      = None   # started_at de la dernière séance
+    derniere_fin:       Optional[str]      = None   # finished_at de la dernière séance
     derniere_matiere:   Optional[str]      = None
     derniere_classe:    Optional[str]      = None
     dernier_status:     Optional[str]      = None
@@ -252,10 +253,11 @@ async def list_suivi_seances(
             total_seances=total,
             seances_terminees=terminees,
             seances_en_cours=en_cours,
-            derniere_activite=_iso(derniere.started_at) if derniere else None,
-            derniere_matiere=derniere.matiere           if derniere else None,
-            derniere_classe=derniere.classe             if derniere else None,
-            dernier_status=derniere.status.value        if derniere else None,
+            derniere_activite=_iso(derniere.started_at)  if derniere else None,
+            derniere_fin=_iso(derniere.finished_at)       if derniere else None,
+            derniere_matiere=derniere.matiere             if derniere else None,
+            derniere_classe=derniere.classe               if derniere else None,
+            dernier_status=derniere.status.value          if derniere else None,
             taux_completion=taux_completion,
             taux_rapport=taux_rapport,
             duree_moy_minutes=duree_moy,

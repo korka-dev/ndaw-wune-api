@@ -102,6 +102,28 @@ async def request_logging_middleware(request: Request, call_next):
 
 # ── Gestionnaires d'erreurs globaux ─────────────────────────────────────────────
 
+def _safe_validation_errors(errors: list) -> list:
+    """Rend les erreurs Pydantic v2 JSON-sérialisables.
+
+    En Pydantic v2, le champ `ctx` peut contenir l'instance d'exception brute
+    (ex. ValueError) qui n'est pas sérialisable par json.dumps().
+    On convertit toute valeur qui est une Exception en sa repr string.
+    """
+    safe = []
+    for err in errors:
+        safe_err = {}
+        for key, val in err.items():
+            if key == "ctx" and isinstance(val, dict):
+                safe_err[key] = {
+                    k: str(v) if isinstance(v, Exception) else v
+                    for k, v in val.items()
+                }
+            else:
+                safe_err[key] = val
+        safe.append(safe_err)
+    return safe
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Loggue en détail les requêtes invalides pour simplifier le débogage."""
@@ -110,36 +132,45 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         body_bytes = await request.body()
     except Exception:
         pass
-    
+
+    errors = _safe_validation_errors(exc.errors())
+
     logger.error(
         "⚠️ Erreur de validation (422) sur %s %s [%s] :\n- Erreurs : %s\n- Body reçu : %s",
         request.method,
         request.url.path,
         getattr(request.state, "request_id", "—"),
-        exc.errors(),
+        errors,
         body_bytes.decode("utf-8", errors="replace"),
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors()},
+        content={"detail": errors},
     )
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """
-    Capture les exceptions non gérées et retourne un 500 propre
-    sans exposer la stack trace au client.
+    Capture les exceptions non gérées et retourne un 500 propre.
+    En développement le message réel est exposé pour faciliter le débogage.
+    En production on masque le détail pour ne pas exposer l'internals.
     """
     logger.exception(
-        "Erreur non gérée sur %s %s [%s]",
+        "Erreur non gérée sur %s %s [%s] : %r",
         request.method,
         request.url.path,
         getattr(request.state, "request_id", "—"),
+        exc,
+    )
+    detail = (
+        f"{type(exc).__name__}: {exc}"
+        if settings.is_development
+        else "Une erreur interne est survenue. Veuillez réessayer."
     )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Une erreur interne est survenue. Veuillez réessayer."},
+        content={"detail": detail},
     )
 
 

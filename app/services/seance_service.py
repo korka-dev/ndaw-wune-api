@@ -3,15 +3,19 @@ Couche service pour les séances (timer) et les rapports enseignants.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.seance import RapportProf, Seance, SeanceStatus
 from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceStart, RapportCreate
+
+logger = logging.getLogger(__name__)
 
 
 # ── Séances ────────────────────────────────────────────────────────────────────
@@ -28,18 +32,45 @@ async def get_active_seance(db: AsyncSession, teacher_id: uuid.UUID) -> Seance |
 
 async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStart) -> Seance:
     """Démarre le timer. Lève 409 si une séance est déjà en cours."""
-    existing = await get_active_seance(db, teacher_id)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Une séance est déjà en cours. Terminez-la avant d'en démarrer une nouvelle.",
-        )
+    logger.info(
+        "start_seance: teacher=%s session=%s classe=%s planning_segment=%s",
+        teacher_id, body.session_id, body.classe, body.planning_segment_id,
+    )
+    try:
+        existing = await get_active_seance(db, teacher_id)
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Une séance est déjà en cours. Terminez-la avant d'en démarrer une nouvelle.",
+            )
 
-    seance = Seance(teacher_id=teacher_id, **body.model_dump())
-    db.add(seance)
-    await db.flush()
-    await db.refresh(seance)
-    return seance
+        seance = Seance(teacher_id=teacher_id, **body.model_dump())
+        db.add(seance)
+        try:
+            await db.flush()
+        except SQLAlchemyError as exc:
+            await db.rollback()
+            orig = getattr(exc, "orig", exc)
+            logger.error("DB Error lors de start_seance teacher=%s : %s", teacher_id, orig)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Impossible de créer la séance : {orig}",
+            )
+        await db.refresh(seance)
+        return seance
+
+    except HTTPException:
+        raise  # laisser passer les HTTPException normales (409, 400...)
+    except Exception as exc:
+        # Attrape toute exception inattendue et l'expose en 400 (pas 500)
+        logger.error(
+            "Erreur inattendue dans start_seance teacher=%s : %r",
+            teacher_id, exc, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Erreur inattendue lors du démarrage : {type(exc).__name__}: {exc}",
+        )
 
 
 async def _get_seance_owned(
@@ -125,24 +156,55 @@ async def finish_seance(
     body: SeanceFinish,
 ) -> Seance:
     """Clôture le timer. Fusionne les pauses offline si fournies."""
-    seance = await _get_seance_owned(db, seance_id, teacher_id)
-    if seance.status != SeanceStatus.en_cours:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cette séance n'est plus en cours.")
+    logger.info(
+        "finish_seance: seance_id=%s teacher=%s finished_at=%s duree=%s pauses=%d",
+        seance_id, teacher_id, body.finished_at, body.duree_minutes, len(body.pauses),
+    )
+    try:
+        seance = await _get_seance_owned(db, seance_id, teacher_id)
+        if seance.status != SeanceStatus.en_cours:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cette séance n'est plus en cours.",
+            )
 
-    seance.finished_at        = body.finished_at
-    seance.duree_minutes      = body.duree_minutes
-    seance.nb_eleves_presents = body.nb_eleves_presents
-    seance.status             = SeanceStatus.terminee
+        seance.finished_at        = body.finished_at
+        seance.duree_minutes      = body.duree_minutes
+        seance.nb_eleves_presents = body.nb_eleves_presents
+        seance.status             = SeanceStatus.terminee
 
-    # Fusionner les pauses offline si le serveur n'en a pas encore
-    if body.pauses and not seance.pauses:
-        seance.pauses = [p.model_dump() for p in body.pauses]
-    if body.total_paused_minutes is not None and seance.total_paused_minutes is None:
-        seance.total_paused_minutes = body.total_paused_minutes
+        # Fusionner les pauses offline si le serveur n'en a pas encore
+        if body.pauses and not seance.pauses:
+            from sqlalchemy.orm.attributes import flag_modified
+            seance.pauses = [p.model_dump() for p in body.pauses]
+            flag_modified(seance, "pauses")
+        if body.total_paused_minutes is not None and seance.total_paused_minutes is None:
+            seance.total_paused_minutes = body.total_paused_minutes
 
-    await db.flush()
-    await db.refresh(seance)
-    return seance
+        try:
+            await db.flush()
+        except SQLAlchemyError as exc:
+            await db.rollback()
+            orig = getattr(exc, "orig", exc)
+            logger.error("DB Error lors de finish_seance seance_id=%s : %s", seance_id, orig)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Impossible de clôturer la séance : {orig}",
+            )
+        await db.refresh(seance)
+        return seance
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Erreur inattendue dans finish_seance seance_id=%s : %r",
+            seance_id, exc, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Erreur inattendue lors de la clôture : {type(exc).__name__}: {exc}",
+        )
 
 
 async def list_teacher_seances(
@@ -168,26 +230,49 @@ async def submit_rapport(
     teacher_id: uuid.UUID,
     body: RapportCreate,
 ) -> RapportProf:
-    # Vérifier l'existence et l'ownership de la séance
-    result = await db.execute(select(Seance).where(Seance.id == body.seance_id))
-    seance = result.scalar_one_or_none()
-    if seance is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Séance introuvable.")
-    if seance.teacher_id != teacher_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cette séance ne vous appartient pas.")
+    logger.info("submit_rapport: teacher=%s seance_id=%s", teacher_id, body.seance_id)
+    try:
+        # Vérifier l'existence et l'ownership de la séance
+        result = await db.execute(select(Seance).where(Seance.id == body.seance_id))
+        seance = result.scalar_one_or_none()
+        if seance is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Séance introuvable.")
+        if seance.teacher_id != teacher_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cette séance ne vous appartient pas.")
 
-    # Un seul rapport par séance (contrainte DB + vérification applicative)
-    existing = (
-        await db.execute(select(RapportProf).where(RapportProf.seance_id == body.seance_id))
-    ).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Un rapport existe déjà pour cette séance.")
+        # Un seul rapport par séance (contrainte DB + vérification applicative)
+        existing = (
+            await db.execute(select(RapportProf).where(RapportProf.seance_id == body.seance_id))
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Un rapport existe déjà pour cette séance.")
 
-    rapport = RapportProf(teacher_id=teacher_id, **body.model_dump())
-    db.add(rapport)
-    await db.flush()
-    await db.refresh(rapport)
-    return rapport
+        rapport = RapportProf(teacher_id=teacher_id, **body.model_dump())
+        db.add(rapport)
+        try:
+            await db.flush()
+        except SQLAlchemyError as exc:
+            await db.rollback()
+            orig = getattr(exc, "orig", exc)
+            logger.error("DB Error lors de submit_rapport teacher=%s seance_id=%s : %s", teacher_id, body.seance_id, orig)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Impossible de soumettre le rapport : {orig}",
+            )
+        await db.refresh(rapport)
+        return rapport
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Erreur inattendue dans submit_rapport teacher=%s seance_id=%s : %r",
+            teacher_id, body.seance_id, exc, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Erreur inattendue lors de la soumission du rapport : {type(exc).__name__}: {exc}",
+        )
 
 
 async def list_teacher_rapports(
