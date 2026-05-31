@@ -58,6 +58,15 @@ class SyncPlanningSegment(BaseModel):
         return self
 
 
+class SyncEleve(BaseModel):
+    id:     uuid.UUID
+    nom:    str
+    prenom: Optional[str]
+    classe: str
+
+    model_config = {"from_attributes": True}
+
+
 class SyncPayload(BaseModel):
     """Payload complet téléchargé par l'app mobile pour fonctionner hors-ligne."""
     synced_at:        datetime
@@ -65,3 +74,4 @@ class SyncPayload(BaseModel):
     school:           Optional[SyncSchool]
     active_session:   Optional[SyncSession]
     planning:         List[SyncPlanningSegment]
+    eleves:           List[SyncEleve] = []

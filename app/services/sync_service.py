@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.eleve import Eleve
 from app.models.planning import PlanningSegment
 from app.models.school import School
 from app.models.session import ProgramSession, SessionStatus, TeacherSession
 from app.models.user import User
 from app.schemas.sync import (
+    SyncEleve,
     SyncPayload,
     SyncPlanningSegment,
     SyncProfile,
@@ -91,10 +93,27 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
 
         planning_items = [SyncPlanningSegment.model_validate(s) for s in segments]
 
+    # ── Élèves liés à l'enseignant ────────────────────────────────────────────
+    eleves_items: list[SyncEleve] = []
+    if user.school_id and user.classes:
+        rows = (
+            await db.execute(
+                select(Eleve)
+                .where(
+                    Eleve.school_id == user.school_id,
+                    Eleve.classe.in_(user.classes),
+                    Eleve.statut == "actif",
+                )
+                .order_by(Eleve.classe, Eleve.nom, Eleve.prenom)
+            )
+        ).scalars().all()
+        eleves_items = [SyncEleve.model_validate(e) for e in rows]
+
     return SyncPayload(
         synced_at=datetime.now(timezone.utc),
         profile=profile,
         school=school_data,
         active_session=active_session,
         planning=planning_items,
+        eleves=eleves_items,
     )
