@@ -78,6 +78,26 @@ class SeanceList(BaseModel):
     items: List[SeanceResponse]
 
 
+# ── Séance manquée ────────────────────────────────────────────────────────────
+
+class SeanceMissedReport(BaseModel):
+    """Payload envoyé par le mobile quand un créneau planifié est manqué."""
+    session_id:           uuid.UUID
+    planning_segment_id:  Optional[uuid.UUID] = None
+    classe:               str
+    matiere:              Optional[str]        = None
+    date_seance:          datetime             # date du jour
+    heure_debut:          str                  # "HH:MM" — pour traçabilité
+    heure_fin:            str                  # "HH:MM" — pour traçabilité
+
+    @field_validator("classe")
+    @classmethod
+    def not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("La classe ne peut pas être vide.")
+        return v.strip()
+
+
 # ── RapportProf ───────────────────────────────────────────────────────────────
 
 class RapportCreate(BaseModel):

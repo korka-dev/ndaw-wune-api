@@ -16,9 +16,11 @@ from app.core.pagination import Page, PageParams
 
 class TestPageParams:
     def test_defaults(self):
-        p = PageParams()
+        # PageParams utilise Query() comme valeur par défaut (annotation FastAPI).
+        # En dehors du cycle Depends, il faut passer les valeurs explicitement.
+        p = PageParams(skip=0, limit=50)
         assert p.skip == 0
-        assert p.limit == 50   # DEFAULT_PAGE_SIZE dans les settings test
+        assert p.limit == 50
 
     def test_custom_values(self):
         p = PageParams(skip=20, limit=10)

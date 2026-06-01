@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # ── Mot de passe par défaut (comptes créés par l'admin) ───────────────────
     # Tous les nouveaux comptes reçoivent ce mot de passe temporaire.
     # L'utilisateur est forcé de le changer à la première connexion.
-    DEFAULT_USER_PASSWORD: str = "P@sser123"
+    DEFAULT_USER_PASSWORD: str = "Passer123"
 
     model_config = SettingsConfigDict(
         env_file=".env",

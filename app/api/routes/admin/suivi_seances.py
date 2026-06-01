@@ -72,6 +72,7 @@ class SuiviSeanceItem(BaseModel):
     total_seances:      int                = 0
     seances_terminees:  int                = 0
     seances_en_cours:   int                = 0
+    seances_manquees:   int                = 0
     derniere_activite:  Optional[str]      = None   # started_at de la dernière séance
     derniere_fin:       Optional[str]      = None   # finished_at de la dernière séance
     derniere_matiere:   Optional[str]      = None
@@ -196,6 +197,7 @@ async def list_suivi_seances(
         total      = len(seances)
         terminees  = sum(1 for s in seances if s.status == SeanceStatus.terminee)
         en_cours   = sum(1 for s in seances if s.status == SeanceStatus.en_cours)
+        manquees   = sum(1 for s in seances if s.status == SeanceStatus.manquee)
         planifiees = sum(1 for s in seances if s.planning_segment_id is not None)
         ad_hoc     = total - planifiees
 
@@ -253,6 +255,7 @@ async def list_suivi_seances(
             total_seances=total,
             seances_terminees=terminees,
             seances_en_cours=en_cours,
+            seances_manquees=manquees,
             derniere_activite=_iso(derniere.started_at)  if derniere else None,
             derniere_fin=_iso(derniere.finished_at)       if derniere else None,
             derniere_matiere=derniere.matiere             if derniere else None,

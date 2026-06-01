@@ -17,6 +17,7 @@ class SeanceStatus(str, enum.Enum):
     en_cours = "en_cours"
     terminee = "terminee"
     annulee  = "annulee"
+    manquee  = "manquee"   # segment planifié non démarré après son heure de fin
 
 
 class Seance(Base, UUIDMixin, TimestampMixin):

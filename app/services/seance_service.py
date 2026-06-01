@@ -13,12 +13,57 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.seance import RapportProf, Seance, SeanceStatus
-from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceStart, RapportCreate
+from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceStart, SeanceMissedReport, RapportCreate
 
 logger = logging.getLogger(__name__)
 
 
 # ── Séances ────────────────────────────────────────────────────────────────────
+
+async def report_missed_seance(
+    db: AsyncSession,
+    teacher_id: uuid.UUID,
+    body: SeanceMissedReport,
+) -> Seance:
+    """
+    Crée une séance avec status=manquee pour traçabilité.
+    Idempotent : si une séance manquée existe déjà pour ce segment ce jour-là, retourne l'existante.
+    """
+    logger.info(
+        "report_missed_seance: teacher=%s segment=%s classe=%s",
+        teacher_id, body.planning_segment_id, body.classe,
+    )
+    # Idempotence : un seul enregistrement manqué par segment par jour
+    if body.planning_segment_id:
+        from sqlalchemy import func as sqlfunc
+        existing = (await db.execute(
+            select(Seance).where(
+                Seance.teacher_id           == teacher_id,
+                Seance.planning_segment_id  == body.planning_segment_id,
+                Seance.status               == SeanceStatus.manquee,
+                sqlfunc.date(Seance.date_seance) == sqlfunc.date(body.date_seance),
+            )
+        )).scalar_one_or_none()
+        if existing:
+            return existing
+
+    seance = Seance(
+        teacher_id          = teacher_id,
+        session_id          = body.session_id,
+        planning_segment_id = body.planning_segment_id,
+        classe              = body.classe,
+        matiere             = body.matiere,
+        date_seance         = body.date_seance,
+        status              = SeanceStatus.manquee,
+        started_at          = None,
+        finished_at         = None,
+        duree_minutes       = 0,
+    )
+    db.add(seance)
+    await db.flush()
+    await db.refresh(seance)
+    return seance
+
 
 async def get_active_seance(db: AsyncSession, teacher_id: uuid.UUID) -> Seance | None:
     result = await db.execute(

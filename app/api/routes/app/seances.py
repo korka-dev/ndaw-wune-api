@@ -6,7 +6,7 @@ from fastapi import APIRouter, status
 
 from app.core.deps import DB, TeacherUser
 from app.core.pagination import Page, Pagination
-from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceResponse, SeanceStart
+from app.schemas.seance import SeanceFinish, SeanceMissedReport, SeancePauseBody, SeanceResumeBody, SeanceResponse, SeanceStart
 from app.services import seance_service
 
 router = APIRouter(prefix="/seances", tags=["App — Séances"])
@@ -14,6 +14,16 @@ router = APIRouter(prefix="/seances", tags=["App — Séances"])
 
 # IMPORTANT : les routes statiques (/active, /start) DOIVENT être déclarées
 # avant les routes paramétrées (/{seance_id}) pour éviter les conflits de routing.
+
+@router.post("/report-missed", response_model=SeanceResponse, status_code=status.HTTP_201_CREATED)
+async def report_missed_seance(
+    body: SeanceMissedReport,
+    current_user: TeacherUser,
+    db: DB,
+) -> SeanceResponse:
+    """Signale un créneau planifié manqué (non démarré après son heure de fin)."""
+    return await seance_service.report_missed_seance(db, current_user.id, body)
+
 
 @router.get("/active", response_model=SeanceResponse | None)
 async def active_seance(current_user: TeacherUser, db: DB) -> SeanceResponse | None:
