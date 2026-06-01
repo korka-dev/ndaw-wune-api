@@ -11,6 +11,12 @@ from __future__ import annotations
 
 from alembic import op
 
+# revision identifiers, used by Alembic.
+revision = 'b22e647b0faf'
+down_revision = 'b0c1d2e3f4a5'
+branch_labels = None
+depends_on = None
+
 
 def upgrade() -> None:
     # PostgreSQL permet d'ajouter une valeur à un enum existant sans recréer le type.
