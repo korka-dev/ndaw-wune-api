@@ -1,7 +1,7 @@
 """Ajouter la valeur manquee au type enum seance_status
 
-Revision ID: a1b2c3d4e5f6
-Revises: f3a1c8e2b945
+Revision ID: b22e647b0faf
+Revises: b0c1d2e3f4a5
 Create Date: 2026-06-01
 
 Ajoute 'manquee' à l'enum PostgreSQL seance_status.
@@ -20,7 +20,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # PostgreSQL ne permet pas de supprimer une valeur d'un enum sans recréer le type.
-    # En pratique : supprimer d'abord toutes les lignes avec status='manquee',
-    # recréer le type sans cette valeur, puis recaster la colonne.
     # On laisse cette migration irréversible pour simplifier.
     pass
