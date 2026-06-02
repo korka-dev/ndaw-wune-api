@@ -12,6 +12,7 @@ from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
     rapports_journalier as app_rapports_journalier,
     supervisor_sync,
+    ressources as app_ressources,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -42,3 +43,4 @@ api_router.include_router(seances.router,                  prefix="/app")
 api_router.include_router(app_rapports.router,             prefix="/app")
 api_router.include_router(app_rapports_journalier.router,  prefix="/app")
 api_router.include_router(supervisor_sync.router,          prefix="/app")  # GET /app/supervisor/sync
+api_router.include_router(app_ressources.router,           prefix="/app")
