@@ -10,3 +10,5 @@ from app.models.seance import Seance, RapportProf, SeanceStatus  # noqa: F401
 from app.models.eleve import Eleve                               # noqa: F401
 from app.models.rapport_journalier import RapportJournalier      # noqa: F401
 from app.models.document import Document                          # noqa: F401
+from app.models.evaluation_eleve import EvaluationEleve           # noqa: F401
+from app.models.supervisor_presence import SupervisorPresenceCheck  # noqa: F401

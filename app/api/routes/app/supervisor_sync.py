@@ -112,7 +112,7 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
     if session:
         active_session = ActiveSessionInfo(
             id=str(session.id),
-            nom=session.nom,
+            nom=session.name,
             date_debut=session.date_debut.isoformat(),
             date_fin=session.date_fin.isoformat(),
         )

@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
 from app.models.rapport_journalier import RapportJournalier
+from app.models.user import User, UserRole
 from app.schemas.rapport_journalier import RapportJournalierResponse
 
 router = APIRouter(prefix="/rapports/journalier", tags=["Admin — Rapports Journaliers"])
@@ -26,6 +27,7 @@ async def list_rapports_journalier(
     _: AdminUser,
     page: Pagination,
     teacher_id:  Optional[uuid.UUID] = None,
+    role:        Optional[UserRole]  = None,   # filtre auteur du rapport : enseignant / superviseur
     search:      Optional[str]       = None,   # recherche nom_tuteur / ecole / ief
     date_from:   Optional[date]      = None,
     date_to:     Optional[date]      = None,
@@ -35,6 +37,8 @@ async def list_rapports_journalier(
         select(RapportJournalier)
         .order_by(RapportJournalier.date_rapport.desc(), RapportJournalier.created_at.desc())
     )
+    if role:
+        base = base.join(User, User.id == RapportJournalier.teacher_id).where(User.role == role)
     if teacher_id:
         base = base.where(RapportJournalier.teacher_id == teacher_id)
     if search:
@@ -64,6 +68,7 @@ async def export_csv(
     db: DB,
     _: AdminUser,
     teacher_id: Optional[uuid.UUID] = None,
+    role:       Optional[UserRole]  = None,
     search:     Optional[str]       = None,
     date_from:  Optional[date]      = None,
     date_to:    Optional[date]      = None,
@@ -71,6 +76,8 @@ async def export_csv(
 ) -> StreamingResponse:
     """Exporte les rapports journaliers filtrés en CSV."""
     q = select(RapportJournalier).options(selectinload(RapportJournalier.teacher))
+    if role:
+        q = q.join(User, User.id == RapportJournalier.teacher_id).where(User.role == role)
     if teacher_id:
         q = q.where(RapportJournalier.teacher_id == teacher_id)
     if search:

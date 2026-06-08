@@ -4,7 +4,7 @@ from app.api.routes import auth
 from app.api.routes.admin import (
     sessions, teachers, schools, planning, rapports, users,
     superviseurs, evaluateurs, eleves,
-    suivi_seances, suivi_superviseurs, suivi_plannings,
+    suivi_seances, suivi_superviseurs, suivi_plannings, suivi_evaluations,
     rapports_journalier as admin_rapports_journalier,
     ressources, classes,
 )
@@ -12,6 +12,8 @@ from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
     rapports_journalier as app_rapports_journalier,
     supervisor_sync,
+    supervisor_evaluations,
+    supervisor_presences,
     ressources as app_ressources,
 )
 
@@ -34,6 +36,7 @@ api_router.include_router(eleves.router,                   prefix="/admin")
 api_router.include_router(classes.router,                  prefix="/admin")
 api_router.include_router(suivi_seances.router,            prefix="/admin")
 api_router.include_router(suivi_superviseurs.router,       prefix="/admin")
+api_router.include_router(suivi_evaluations.router,        prefix="/admin")
 api_router.include_router(suivi_plannings.router,          prefix="/admin")
 api_router.include_router(ressources.router,               prefix="/admin")
 
@@ -43,4 +46,6 @@ api_router.include_router(seances.router,                  prefix="/app")
 api_router.include_router(app_rapports.router,             prefix="/app")
 api_router.include_router(app_rapports_journalier.router,  prefix="/app")
 api_router.include_router(supervisor_sync.router,          prefix="/app")  # GET /app/supervisor/sync
+api_router.include_router(supervisor_evaluations.router,   prefix="/app")  # /app/supervisor/eleves + /app/supervisor/evaluations
+api_router.include_router(supervisor_presences.router,     prefix="/app")  # /app/supervisor/presences
 api_router.include_router(app_ressources.router,           prefix="/app")
