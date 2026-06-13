@@ -51,7 +51,9 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
 
     # ── Métadonnées ──────────────────────────────────────────────────────────
     soumis_en_offline: Mapped[bool]          = mapped_column(Boolean, default=True, nullable=False)
-    photo_classe_url:  Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    photo_classe_url:  Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # ancien champ — 1 seule photo
+    photos_classe_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # liste JSON — jusqu'à 3 photos
+    reponses_questions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON {question_id: réponse} — questions dynamiques configurées par l'admin
 
     # ── Relations ─────────────────────────────────────────────────────────────
     teacher: Mapped["User"] = relationship("User")

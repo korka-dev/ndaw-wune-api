@@ -12,10 +12,15 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import logging
+
 from app.core.config import settings
+from app.core.redis import get_redis
 from app.core.security import hash_password, verify_password
 from app.models.user import User, UserRole, UserStatus
 from app.schemas.user import UserCreate, UserUpdate
+
+logger = logging.getLogger(__name__)
 
 
 # ── Constante mot de passe par défaut ─────────────────────────────────────────
@@ -143,6 +148,17 @@ async def update_user(db: AsyncSession, user_id: uuid.UUID, body: UserUpdate) ->
 
     await db.flush()
     await db.refresh(user, attribute_names=["school"])
+
+    # Si l'école/les classes/le niveau de l'enseignant ont changé, le cache de
+    # sync (mobile) doit être invalidé pour que les nouvelles données (école,
+    # élèves) soient récupérées dès la prochaine synchronisation.
+    if {"school_id", "classes", "niveau"} & data.keys():
+        try:
+            redis = await get_redis()
+            await redis.delete(f"sync:{user.id}")
+        except Exception as exc:
+            logger.warning("[UserService] Redis indisponible (invalidation sync) : %s", exc)
+
     return user
 
 

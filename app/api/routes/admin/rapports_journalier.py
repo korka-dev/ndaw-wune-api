@@ -13,6 +13,7 @@ from sqlalchemy import func, select, or_
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
+from app.core.export_utils import build_csv_response
 from app.core.pagination import Page, Pagination
 from app.models.rapport_journalier import RapportJournalier
 from app.models.user import User, UserRole
@@ -73,6 +74,7 @@ async def export_csv(
     date_from:  Optional[date]      = None,
     date_to:    Optional[date]      = None,
     ief:        Optional[str]       = None,
+    fields:     Optional[str]       = None,
 ) -> StreamingResponse:
     """Exporte les rapports journaliers filtrés en CSV."""
     q = select(RapportJournalier).options(selectinload(RapportJournalier.teacher))
@@ -98,27 +100,41 @@ async def export_csv(
 
     rapports = (await db.execute(q.order_by(RapportJournalier.date_rapport))).scalars().all()
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "date_rapport", "tuteur", "ief", "commune", "ecole", "superviseur",
-        "nb_absences", "absents", "semaine", "jour_cours",
-        "difficultes", "autres_difficultes", "description_difficultes",
-        "directeur_venu", "besoin_appui", "domaines_appui",
-        "has_observations", "commentaires", "soumis_en_offline",
-    ])
-    for r in rapports:
-        writer.writerow([
+    columns = [
+        ("date_rapport",            "date_rapport"),
+        ("tuteur",                  "tuteur"),
+        ("ief",                     "ief"),
+        ("commune",                 "commune"),
+        ("ecole",                   "ecole"),
+        ("superviseur",             "superviseur"),
+        ("nb_absences",             "nb_absences"),
+        ("absents",                 "absents"),
+        ("semaine",                 "semaine"),
+        ("jour_cours",              "jour_cours"),
+        ("difficultes",             "difficultes"),
+        ("autres_difficultes",      "autres_difficultes"),
+        ("description_difficultes", "description_difficultes"),
+        ("directeur_venu",          "directeur_venu"),
+        ("besoin_appui",            "besoin_appui"),
+        ("domaines_appui",          "domaines_appui"),
+        ("has_observations",        "has_observations"),
+        ("commentaires",            "commentaires"),
+        ("soumis_en_offline",       "soumis_en_offline"),
+    ]
+    rows = [
+        [
             r.date_rapport, r.nom_tuteur, r.ief, r.commune, r.ecole, r.superviseur,
             r.nb_absences, r.absents, r.semaine, r.jour_cours,
             r.difficultes, r.autres_difficultes, r.description_difficultes,
             r.directeur_venu, r.besoin_appui, r.domaines_appui,
             r.has_observations, r.commentaires, r.soumis_en_offline,
-        ])
+        ]
+        for r in rapports
+    ]
 
-    output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=rapports_journalier.csv"},
+    return build_csv_response(
+        columns=columns,
+        rows=rows,
+        fields=fields,
+        filename="rapports_journalier.csv",
     )

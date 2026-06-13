@@ -6,11 +6,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.eleve import Eleve
 from app.models.planning import PlanningSegment
+from app.models.rapport_question import RapportQuestion
 from app.models.school import School
 from app.models.session import ProgramSession, SessionStatus, TeacherSession
 from app.models.user import User
@@ -19,6 +20,7 @@ from app.schemas.sync import (
     SyncPayload,
     SyncPlanningSegment,
     SyncProfile,
+    SyncRapportQuestion,
     SyncSchool,
     SyncSession,
 )
@@ -96,18 +98,34 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
     # ── Élèves liés à l'enseignant ────────────────────────────────────────────
     eleves_items: list[SyncEleve] = []
     if user.school_id and user.classes:
+        # Comparaison normalisée (espaces/casse) pour éviter qu'un écart de
+        # saisie entre la classe de l'enseignant et celle des élèves importés
+        # (ex. "CM1 A" vs "cm1a") ne fasse disparaître les élèves de la sync.
+        normalized_classes = [
+            " ".join(c.strip().split()).lower() for c in user.classes if c and c.strip()
+        ]
         rows = (
             await db.execute(
                 select(Eleve)
                 .where(
                     Eleve.school_id == user.school_id,
-                    Eleve.classe.in_(user.classes),
+                    func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")).in_(normalized_classes),
                     Eleve.statut == "actif",
                 )
                 .order_by(Eleve.classe, Eleve.nom, Eleve.prenom)
             )
         ).scalars().all()
         eleves_items = [SyncEleve.model_validate(e) for e in rows]
+
+    # ── Questions complémentaires du rapport journalier (configurées par l'admin) ──
+    questions_rows = (
+        await db.execute(
+            select(RapportQuestion)
+            .where(RapportQuestion.active.is_(True))
+            .order_by(RapportQuestion.ordre, RapportQuestion.created_at)
+        )
+    ).scalars().all()
+    rapport_questions_items = [SyncRapportQuestion.model_validate(q) for q in questions_rows]
 
     return SyncPayload(
         synced_at=datetime.now(timezone.utc),
@@ -116,4 +134,5 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         active_session=active_session,
         planning=planning_items,
         eleves=eleves_items,
+        rapport_questions=rapport_questions_items,
     )

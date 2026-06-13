@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.deps import DB, SuperviseurUser
+from app.models.evaluation_competence import EvaluationCompetence
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
 
@@ -54,11 +55,21 @@ class ActiveSessionInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EvaluationCompetenceItem(BaseModel):
+    id:    str
+    label: str
+    code:  str
+    ordre: int
+
+    model_config = {"from_attributes": True}
+
+
 class SupervisorSyncPayload(BaseModel):
     synced_at:      str
     profile:        SupervisorProfile
     assigned_teachers: list[AssignedTeacher]
     active_session: Optional[ActiveSessionInfo] = None
+    evaluation_competences: list[EvaluationCompetenceItem] = []
 
 
 # ── Route ─────────────────────────────────────────────────────────────────────
@@ -117,9 +128,23 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
             date_fin=session.date_fin.isoformat(),
         )
 
+    # ── Compétences d'évaluation (configurées par l'admin) ───────────────────
+    competences_rows = (
+        await db.execute(
+            select(EvaluationCompetence)
+            .where(EvaluationCompetence.active.is_(True))
+            .order_by(EvaluationCompetence.ordre, EvaluationCompetence.created_at)
+        )
+    ).scalars().all()
+    evaluation_competences = [
+        EvaluationCompetenceItem(id=str(c.id), label=c.label, code=c.code, ordre=c.ordre)
+        for c in competences_rows
+    ]
+
     return SupervisorSyncPayload(
         synced_at=datetime.now(timezone.utc).isoformat(),
         profile=profile,
         assigned_teachers=assigned_teachers,
         active_session=active_session,
+        evaluation_competences=evaluation_competences,
     )

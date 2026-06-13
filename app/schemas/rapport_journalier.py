@@ -25,6 +25,8 @@ class RapportJournalierCreate(BaseModel):
     commentaires:             Optional[str]    = None
     soumis_en_offline:        bool             = True
     photo_classe_url:         Optional[str]    = None
+    photos_classe_url:        Optional[str]    = None   # JSON sérialisé (liste de data URIs, max 3)
+    reponses_questions:       Optional[str]    = None   # JSON sérialisé {question_id: réponse}
 
 
 class RapportJournalierResponse(BaseModel):
@@ -50,6 +52,8 @@ class RapportJournalierResponse(BaseModel):
     commentaires:             Optional[str]
     soumis_en_offline:        bool
     photo_classe_url:         Optional[str]
+    photos_classe_url:        Optional[str] = None
+    reponses_questions:       Optional[str] = None
     created_at:               datetime
 
     model_config = {"from_attributes": True}

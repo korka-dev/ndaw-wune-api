@@ -310,6 +310,10 @@ async def run(xlsx_path: str) -> None:
     df = pd.read_excel(xlsx_path, header=0)
     df.columns = [str(c).strip() for c in df.columns]
 
+    # Le fichier peut utiliser "tuteur" au lieu de "enseignant" pour la colonne enseignant
+    if "enseignant" not in df.columns and "tuteur" in df.columns:
+        df = df.rename(columns={"tuteur": "enseignant"})
+
     # Nettoyer les valeurs texte
     for col in ["IEF", "COMMUNE", "SCHOOL", "SCHOOL_CLASSE", "enseignant", "NIVEAU", "Classe", "name", "Sexe"]:
         if col in df.columns:

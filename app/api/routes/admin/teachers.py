@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
+from typing import Optional
 
 import openpyxl
 from fastapi import APIRouter, Body, File, HTTPException, Response, UploadFile, status
@@ -10,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select
 
 from app.core.deps import AdminUser, DB
+from app.core.export_utils import build_xlsx_response
 from app.core.pagination import Page, Pagination
 from app.core.security import hash_password
 from app.models.school import School
@@ -59,28 +61,22 @@ async def export_teachers_csv(db: DB, _: AdminUser) -> StreamingResponse:
 # ── Export Excel ──────────────────────────────────────────────────────────────
 
 @router.get("/export/xlsx")
-async def export_teachers_xlsx(db: DB, _: AdminUser) -> StreamingResponse:
+async def export_teachers_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None) -> StreamingResponse:
     items = (await db.execute(
         select(User).where(User.role == UserRole.enseignant).order_by(User.name)
     )).scalars().all()
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Enseignants"
-
-    from openpyxl.styles import Font, PatternFill, Alignment
-    header_fill = PatternFill(start_color="1e6fbf", end_color="1e6fbf", fill_type="solid")
-    header_font = Font(bold=True, color="FFFFFF", size=11)
-
-    headers = ["Nom Complet", "Téléphone", "Titre / Fonction", "Email", "Niveaux", "Classes", "Statut"]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center")
-
-    for t in items:
-        ws.append([
+    columns = [
+        ("nom",     "Nom Complet",       25),
+        ("phone",   "Téléphone",         18),
+        ("titre",   "Titre / Fonction",  20),
+        ("email",   "Email",             25),
+        ("niveaux", "Niveaux",           20),
+        ("classes", "Classes",           20),
+        ("statut",  "Statut",            12),
+    ]
+    rows = [
+        [
             t.name,
             t.phone or "",
             t.title or "",
@@ -88,19 +84,16 @@ async def export_teachers_xlsx(db: DB, _: AdminUser) -> StreamingResponse:
             ", ".join(t.niveau or []),
             ", ".join(t.classes or []),
             t.status,
-        ])
+        ]
+        for t in items
+    ]
 
-    col_widths = [25, 18, 20, 25, 20, 20, 12]
-    for i, w in enumerate(col_widths, start=1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.read()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=enseignants.xlsx"},
+    return build_xlsx_response(
+        sheet_title="Enseignants",
+        columns=columns,
+        rows=rows,
+        fields=fields,
+        filename="enseignants.xlsx",
     )
 
 

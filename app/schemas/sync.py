@@ -67,6 +67,17 @@ class SyncEleve(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SyncRapportQuestion(BaseModel):
+    id:       uuid.UUID
+    label:    str
+    type:     str
+    options:  Optional[List[str]] = None
+    required: bool
+    ordre:    int
+
+    model_config = {"from_attributes": True}
+
+
 class SyncPayload(BaseModel):
     """Payload complet téléchargé par l'app mobile pour fonctionner hors-ligne."""
     synced_at:        datetime
@@ -75,3 +86,4 @@ class SyncPayload(BaseModel):
     active_session:   Optional[SyncSession]
     planning:         List[SyncPlanningSegment]
     eleves:           List[SyncEleve] = []
+    rapport_questions: List[SyncRapportQuestion] = []

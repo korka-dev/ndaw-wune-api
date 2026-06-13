@@ -6,7 +6,7 @@ from app.api.routes.admin import (
     superviseurs, evaluateurs, eleves,
     suivi_seances, suivi_superviseurs, suivi_plannings, suivi_evaluations,
     rapports_journalier as admin_rapports_journalier,
-    ressources, classes,
+    ressources, classes, rapport_questions, evaluation_competences,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -14,6 +14,7 @@ from app.api.routes.app import (
     supervisor_sync,
     supervisor_evaluations,
     supervisor_presences,
+    supervisor_difficultes,
     ressources as app_ressources,
 )
 
@@ -39,6 +40,8 @@ api_router.include_router(suivi_superviseurs.router,       prefix="/admin")
 api_router.include_router(suivi_evaluations.router,        prefix="/admin")
 api_router.include_router(suivi_plannings.router,          prefix="/admin")
 api_router.include_router(ressources.router,               prefix="/admin")
+api_router.include_router(rapport_questions.router,         prefix="/admin")
+api_router.include_router(evaluation_competences.router,    prefix="/admin")
 
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")
@@ -48,4 +51,5 @@ api_router.include_router(app_rapports_journalier.router,  prefix="/app")
 api_router.include_router(supervisor_sync.router,          prefix="/app")  # GET /app/supervisor/sync
 api_router.include_router(supervisor_evaluations.router,   prefix="/app")  # /app/supervisor/eleves + /app/supervisor/evaluations
 api_router.include_router(supervisor_presences.router,     prefix="/app")  # /app/supervisor/presences
+api_router.include_router(supervisor_difficultes.router,   prefix="/app")  # /app/supervisor/difficultes
 api_router.include_router(app_ressources.router,           prefix="/app")

@@ -1,12 +1,14 @@
 import csv
 import io
 import uuid
+from typing import Optional
 import openpyxl
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
+from app.core.export_utils import build_xlsx_response
 from app.core.pagination import Page, Pagination
 from app.models.school import School
 from app.schemas.school import SchoolCreate, SchoolUpdate, SchoolResponse
@@ -68,44 +70,33 @@ async def export_schools_csv(db: DB, _: AdminUser) -> StreamingResponse:
 # ── Export Excel ──────────────────────────────────────────────────────────────
 
 @router.get("/export/xlsx")
-async def export_schools_xlsx(db: DB, _: AdminUser) -> StreamingResponse:
+async def export_schools_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None) -> StreamingResponse:
     items = (await db.execute(select(School).order_by(School.name))).scalars().all()
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Écoles"
-
-    from openpyxl.styles import Font, PatternFill, Alignment
-    header_fill = PatternFill(start_color="1e6fbf", end_color="1e6fbf", fill_type="solid")
-    header_font = Font(bold=True, color="FFFFFF", size=11)
-
-    headers = ["Nom de l'école", "Région (IEF)", "Commune / Ville", "Directeur(trice)", "Téléphone"]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center")
-
-    for s in items:
-        ws.append([
+    columns = [
+        ("nom",       "Nom de l'école",   30),
+        ("region",    "Région (IEF)",     20),
+        ("commune",   "Commune / Ville",  20),
+        ("directeur", "Directeur(trice)", 25),
+        ("telephone", "Téléphone",        18),
+    ]
+    rows = [
+        [
             s.name,
             s.region or "",
             s.city or "",
             s.director or "",
             s.director_phone or "",
-        ])
+        ]
+        for s in items
+    ]
 
-    col_widths = [30, 20, 20, 25, 18]
-    for i, w in enumerate(col_widths, start=1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.read()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=ecoles.xlsx"},
+    return build_xlsx_response(
+        sheet_title="Écoles",
+        columns=columns,
+        rows=rows,
+        fields=fields,
+        filename="ecoles.xlsx",
     )
 
 
