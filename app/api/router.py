@@ -16,6 +16,7 @@ from app.api.routes.app import (
     supervisor_evaluations,
     supervisor_presences,
     supervisor_difficultes,
+    teacher_evaluations,
     ressources as app_ressources,
 )
 
@@ -54,4 +55,5 @@ api_router.include_router(supervisor_sync.router,          prefix="/app")  # GET
 api_router.include_router(supervisor_evaluations.router,   prefix="/app")  # /app/supervisor/eleves + /app/supervisor/evaluations
 api_router.include_router(supervisor_presences.router,     prefix="/app")  # /app/supervisor/presences
 api_router.include_router(supervisor_difficultes.router,   prefix="/app")  # /app/supervisor/difficultes
+api_router.include_router(teacher_evaluations.router,      prefix="/app")  # /app/teacher/evaluations
 api_router.include_router(app_ressources.router,           prefix="/app")
