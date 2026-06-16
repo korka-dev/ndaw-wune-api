@@ -9,14 +9,18 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from jose import JWTError
+from sqlalchemy import select
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import engine, AsyncSessionLocal
 from app.core.logging import setup_logging
 from app.core.redis import close_redis, get_redis
+from app.core.security import decode_token
+from app.models.user import User
 from app.api.router import api_router
 
 # Configurer le logging avant tout le reste
@@ -97,6 +101,49 @@ async def request_logging_middleware(request: Request, call_next):
     )
     # Exposer l'ID dans la réponse pour faciliter le support
     response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def audit_log_middleware(request: Request, call_next):
+    """
+    Historique des modifications : enregistre toute action de création,
+    modification ou suppression effectuée sur les routes d'administration,
+    avec l'identité de l'utilisateur connecté.
+    """
+    response = await call_next(request)
+
+    try:
+        if (
+            response.status_code < 400
+            and request.method in ("POST", "PUT", "PATCH", "DELETE")
+            and "/admin/" in request.url.path
+            and not request.url.path.rstrip("/").endswith("/audit-logs")
+        ):
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                token = auth_header.split(" ", 1)[1]
+                try:
+                    payload = decode_token(token)
+                    user_id = payload.get("sub")
+                except JWTError:
+                    user_id = None
+
+                if user_id:
+                    async with AsyncSessionLocal() as session:
+                        result = await session.execute(select(User).where(User.id == user_id))
+                        user = result.scalar_one_or_none()
+                        if user is not None:
+                            from app.services.audit_service import log_action
+                            await log_action(
+                                session,
+                                user=user,
+                                method=request.method,
+                                path=request.url.path,
+                            )
+    except Exception:
+        logger.exception("Échec de l'enregistrement de l'historique des modifications.")
+
     return response
 
 

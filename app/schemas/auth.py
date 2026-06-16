@@ -78,12 +78,8 @@ class ChangePasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Le mot de passe doit contenir au moins 8 caractères.")
-        if not any(c.isupper() for c in v):
-            raise ValueError("Le mot de passe doit contenir au moins une majuscule.")
-        if not any(c.isdigit() for c in v):
-            raise ValueError("Le mot de passe doit contenir au moins un chiffre.")
+        if not v:
+            raise ValueError("Le mot de passe ne peut pas être vide.")
         return v
 
     @field_validator("confirm_password", mode="after")
@@ -111,12 +107,8 @@ class ResetPasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Le mot de passe doit contenir au moins 8 caractères.")
-        if not any(c.isupper() for c in v):
-            raise ValueError("Le mot de passe doit contenir au moins une majuscule.")
-        if not any(c.isdigit() for c in v):
-            raise ValueError("Le mot de passe doit contenir au moins un chiffre.")
+        if not v:
+            raise ValueError("Le mot de passe ne peut pas être vide.")
         return v
 
     @field_validator("confirm_password", mode="after")

@@ -179,11 +179,10 @@ async def change_password(
             detail="Vous ne pouvez pas conserver le mot de passe temporaire attribué à la création du compte. Choisissez un nouveau mot de passe personnel.",
         )
 
-    # Vérifier que le nouveau mot de passe est suffisamment fort (min 8 caractères)
-    if len(new_password) < 8:
+    if not new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Le mot de passe doit contenir au moins 8 caractères.",
+            detail="Le mot de passe ne peut pas être vide.",
         )
 
     user.password_hash        = hash_password(new_password)
