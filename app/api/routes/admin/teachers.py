@@ -312,6 +312,179 @@ async def import_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
     }
 
 
+# ── Réimport depuis l'export plateforme (mise à jour téléphones + création) ──
+
+@router.post("/reimport")
+async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Réimporte le fichier Excel exporté depuis la plateforme.
+    Format attendu : identique à /export/xlsx
+    (colonnes : Nom Complet, Téléphone, Titre / Fonction, Email, Niveaux, Classes, Statut)
+
+    - Trouvé par nom → met à jour téléphone / titre / email / niveaux / classes si modifiés
+    - Non trouvé     → crée l'enseignant (téléphone obligatoire)
+    - Conflit phone unique → signalé dans errors, ligne ignorée sans planter le reste
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if len(all_rows) < 2:
+        raise HTTPException(status_code=422, detail="Fichier vide ou sans données.")
+
+    # ── Mapper les colonnes (insensible à la casse) ────────────────────────────
+    raw_header = all_rows[0]
+    header = [str(c).strip().lower() if c is not None else "" for c in raw_header]
+
+    HEADER_ALIASES: dict[str, list[str]] = {
+        "nom":     ["nom complet", "nom", "name"],
+        "phone":   ["téléphone", "telephone", "phone", "tel"],
+        "titre":   ["titre / fonction", "titre", "title", "fonction"],
+        "email":   ["email", "e-mail", "mail"],
+        "niveaux": ["niveaux", "niveau", "level"],
+        "classes": ["classes", "classe", "class"],
+    }
+    col_idx: dict[str, int] = {}
+    for field, aliases in HEADER_ALIASES.items():
+        for alias in aliases:
+            if alias in header:
+                col_idx[field] = header.index(alias)
+                break
+
+    if "nom" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail="Colonne 'Nom Complet' introuvable. Exportez d'abord depuis la plateforme."
+        )
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Charger tous les enseignants en 1 requête ──────────────────────────────
+    all_teachers = (await db.execute(
+        select(User).where(User.role == UserRole.enseignant)
+    )).scalars().all()
+
+    # Index nom normalisé → User (premier match si homonymes en base)
+    teacher_by_name: dict[str, User] = {}
+    for t in all_teachers:
+        key = t.name.strip().upper()
+        if key not in teacher_by_name:
+            teacher_by_name[key] = t
+
+    # Index téléphone → id pour détecter les conflits d'unicité
+    phone_to_id: dict[str, str] = {
+        t.phone.strip(): str(t.id)
+        for t in all_teachers
+        if t.phone
+    }
+
+    updated = 0
+    created = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for line_num, row in enumerate(all_rows[1:], start=2):
+        name = col(row, "nom")
+        if not name:
+            skipped += 1
+            continue
+
+        phone   = col(row, "phone")   or None
+        titre   = col(row, "titre")   or None
+        email   = col(row, "email")   or None
+        niv_raw = col(row, "niveaux")
+        niveaux = [n.strip() for n in niv_raw.split(",") if n.strip()] if niv_raw else None
+        cls_raw = col(row, "classes")
+        classes = [c.strip() for c in cls_raw.split(",") if c.strip()] if cls_raw else None
+
+        existing = teacher_by_name.get(name.strip().upper())
+
+        if existing:
+            changed = False
+
+            if phone and phone != (existing.phone or ""):
+                conflict = phone_to_id.get(phone)
+                if conflict and conflict != str(existing.id):
+                    errors.append(
+                        f"Ligne {line_num} — {name} : le numéro {phone} est déjà utilisé par un autre enseignant."
+                    )
+                    skipped += 1
+                    continue
+                if existing.phone:
+                    phone_to_id.pop(existing.phone, None)
+                existing.phone = phone
+                phone_to_id[phone] = str(existing.id)
+                changed = True
+
+            if titre and titre != (existing.title or ""):
+                existing.title = titre
+                changed = True
+            if email and email != (existing.email or ""):
+                existing.email = email
+                changed = True
+            if niveaux is not None and niveaux != (existing.niveau or []):
+                existing.niveau = niveaux
+                changed = True
+            if classes is not None and classes != (existing.classes or []):
+                existing.classes = classes
+                changed = True
+
+            if changed:
+                db.add(existing)
+                updated += 1
+            else:
+                skipped += 1
+
+        else:
+            # Création — téléphone obligatoire (identifiant de connexion)
+            if not phone:
+                errors.append(
+                    f"Ligne {line_num} — {name} : introuvable en base et aucun téléphone fourni (création impossible)."
+                )
+                skipped += 1
+                continue
+
+            conflict = phone_to_id.get(phone)
+            if conflict:
+                errors.append(
+                    f"Ligne {line_num} — {name} : le numéro {phone} est déjà utilisé par un autre enseignant."
+                )
+                skipped += 1
+                continue
+
+            new_user = User(
+                name=name,
+                phone=phone,
+                email=email,
+                title=titre,
+                role=UserRole.enseignant,
+                status=UserStatus.actif,
+                password_hash=_DEFAULT_PW_HASH,
+                must_change_password=True,
+                niveau=niveaux,
+                classes=classes,
+            )
+            db.add(new_user)
+            teacher_by_name[name.strip().upper()] = new_user
+            phone_to_id[phone] = "new"
+            created += 1
+
+    if updated or created:
+        await db.flush()
+
+    return {"updated": updated, "created": created, "skipped": skipped, "errors": errors}
+
+
 # ── Routes paramétrées — après les routes fixes ──────────────────────────────
 
 @router.get("/{teacher_id}", response_model=UserResponse)

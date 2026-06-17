@@ -1,10 +1,12 @@
 """Routes admin — Gestion des classes par école."""
 from __future__ import annotations
 
+import io
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+import openpyxl
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import select, func
 
 from app.core.deps import AdminUser, DB
@@ -75,6 +77,134 @@ async def create_classe(body: SchoolClasseCreate, db: DB, _: AdminUser) -> Schoo
     await db.flush()
     await db.refresh(obj, attribute_names=["school"])
     return obj
+
+
+@router.post("/reimport")
+async def reimport_classes_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Réimporte le fichier Excel exporté depuis la plateforme.
+    Format attendu : Nom de la classe, Niveau, École associée, Région, Commune
+
+    - Classe existante (même nom + même école) → ignorée
+    - Nouvelle classe → créée ; école créée si elle n'existe pas encore
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if len(all_rows) < 2:
+        raise HTTPException(status_code=422, detail="Fichier vide ou sans données.")
+
+    # ── Mapper les colonnes ────────────────────────────────────────────────────
+    raw_header = all_rows[0]
+    header = [str(c).strip().lower() if c is not None else "" for c in raw_header]
+
+    HEADER_ALIASES: dict[str, list[str]] = {
+        "nom":     ["nom de la classe", "nom", "name", "classe"],
+        "niveau":  ["niveau", "level"],
+        "ecole":   ["école associée", "ecole associee", "école", "ecole", "school"],
+        "region":  ["région de l'école (ief)", "region de l'ecole (ief)", "région", "region", "ief"],
+        "commune": ["commune / ville", "commune", "ville", "city"],
+    }
+    col_idx: dict[str, int] = {}
+    for field, aliases in HEADER_ALIASES.items():
+        for alias in aliases:
+            if alias in header:
+                col_idx[field] = header.index(alias)
+                break
+
+    if "nom" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail="Colonne 'Nom de la classe' introuvable. Exportez d'abord depuis la plateforme."
+        )
+    if "ecole" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail="Colonne 'École associée' introuvable. Exportez d'abord depuis la plateforme."
+        )
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Charger les données existantes en 2 requêtes ──────────────────────────
+    all_schools = (await db.execute(select(School))).scalars().all()
+    school_by_name: dict[str, School] = {s.name.strip().upper(): s for s in all_schools}
+
+    all_classes = (await db.execute(select(SchoolClasse))).scalars().all()
+    existing_set: set[tuple[str, str]] = {
+        (c.name.strip().upper(), str(c.school_id)) for c in all_classes
+    }
+
+    created = 0
+    skipped = 0
+    errors: list[str] = []
+    new_schools: list[School] = []
+
+    for line_num, row in enumerate(all_rows[1:], start=2):
+        name   = col(row, "nom")
+        ecole  = col(row, "ecole")
+        if not name or not ecole:
+            skipped += 1
+            continue
+
+        # Niveau : colonne si présente, sinon premier mot du nom ("CE1 A" → "CE1")
+        niveau = col(row, "niveau") or name.split()[0]
+
+        region  = col(row, "region")  or None
+        commune = col(row, "commune") or None
+
+        # Trouver ou créer l'école
+        ecole_key = ecole.strip().upper()
+        school = school_by_name.get(ecole_key)
+        if school is None:
+            school = School(
+                name=ecole.strip(),
+                region=region,
+                city=commune,
+            )
+            db.add(school)
+            new_schools.append(school)
+            await db.flush()
+            await db.refresh(school)
+            school_by_name[ecole_key] = school
+
+        # Vérifier si la classe existe déjà
+        class_key = (name.strip().upper(), str(school.id))
+        if class_key in existing_set:
+            skipped += 1
+            continue
+
+        try:
+            obj = SchoolClasse(
+                name=name.strip(),
+                niveau=niveau,
+                school_id=school.id,
+            )
+            db.add(obj)
+            existing_set.add(class_key)
+            created += 1
+        except Exception as exc:
+            errors.append(f"Ligne {line_num} — {name} ({ecole}) : {exc}")
+
+    if created:
+        await db.flush()
+
+    return {
+        "created":         created,
+        "skipped":         skipped,
+        "schools_created": len(new_schools),
+        "errors":          errors,
+    }
 
 
 @router.get("/{classe_id}", response_model=SchoolClasseResponse)
