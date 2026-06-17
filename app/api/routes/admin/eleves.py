@@ -452,6 +452,107 @@ async def import_eleves(db: DB, _: AdminUser, file: UploadFile = File(...)) -> d
     }
 
 
+# ── Réimport depuis le fichier exporté ────────────────────────────────────────
+
+@router.post("/reimport")
+async def reimport_eleves_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Réimporte le fichier Excel exporté depuis la plateforme.
+    Format attendu : Nom, Prénom, Sexe, Date de naissance, Classe, Statut
+    - Élève existant (même nom + prénom + classe) → ignoré
+    - Nouvel élève → créé
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if len(all_rows) < 2:
+        raise HTTPException(status_code=422, detail="Fichier vide ou sans données.")
+
+    # ── Mapper les colonnes (comparaison lowercase directe) ───────────────────
+    raw_header = [str(c) if c is not None else "" for c in all_rows[0]]
+    header_lower = [h.strip().lower() for h in raw_header]
+
+    HEADER_ALIASES: dict[str, list[str]] = {
+        "nom":            ["nom", "name", "last_name", "lastname", "surname"],
+        "prenom":         ["prenom", "prénom", "firstname", "first_name", "given_name"],
+        "genre":          ["sexe", "genre", "sex", "gender"],
+        "date_naissance": ["date naissance", "date_naissance", "naissance", "date de naissance", "dob", "birthdate"],
+        "classe":         ["classe", "class", "level", "niveau"],
+        "statut":         ["statut", "status", "etat", "état"],
+    }
+    col_idx: dict[str, int] = {}
+    for field, aliases in HEADER_ALIASES.items():
+        for i, h in enumerate(header_lower):
+            if h in aliases and field not in col_idx:
+                col_idx[field] = i
+                break
+
+    if "nom" not in col_idx or "classe" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Colonnes 'nom' et 'classe' requises. Colonnes détectées : {raw_header}. Exportez d'abord depuis la plateforme.",
+        )
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Charger les élèves existants (1 requête) ──────────────────────────────
+    existing_db = (await db.execute(select(Eleve))).scalars().all()
+    existing_set: set[tuple[str, str, str]] = {
+        (e.nom.strip().upper(), (e.prenom or "").strip().upper(), e.classe.strip().upper())
+        for e in existing_db
+    }
+
+    rows_to_insert: list[dict] = []
+    errors: list[str] = []
+    skipped = 0
+
+    for line_num, row in enumerate(all_rows[1:], start=2):
+        if all(not str(v or "").strip() for v in row):
+            continue
+
+        nom    = col(row, "nom")
+        classe = col(row, "classe")
+        if not nom or not classe:
+            errors.append(f"Ligne {line_num} : 'nom' ou 'classe' manquant — ignoré.")
+            skipped += 1
+            continue
+
+        prenom = col(row, "prenom") or ""
+        key = (nom.strip().upper(), prenom.strip().upper(), classe.strip().upper())
+        if key in existing_set:
+            skipped += 1
+            continue
+
+        rows_to_insert.append({
+            "nom":            nom.strip(),
+            "prenom":         prenom or None,
+            "genre":          col(row, "genre") or None,
+            "date_naissance": col(row, "date_naissance") or None,
+            "classe":         classe.strip(),
+            "statut":         col(row, "statut") or "actif",
+        })
+        existing_set.add(key)
+
+    imported = await _bulk_insert(db, rows_to_insert)
+
+    return {
+        "imported": imported,
+        "skipped":  skipped,
+        "errors":   errors[:50],
+    }
+
+
 # ── Import CSV (rétrocompatibilité) ───────────────────────────────────────────
 
 @router.post("/import/csv")

@@ -129,6 +129,140 @@ async def import_schools_csv(db: DB, _: AdminUser, file: UploadFile = File(...))
     return {"imported": imported, "errors": errors}
 
 
+# ── Réimport depuis le fichier exporté ────────────────────────────────────────
+
+@router.post("/reimport")
+async def reimport_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
+    """
+    Réimporte le fichier Excel exporté depuis la plateforme.
+    Format attendu : Nom de l'école, Région (IEF), Commune / Ville, Directeur(trice), Téléphone
+    - École existante (même nom) → mise à jour des champs modifiés
+    - Nouvelle école → créée
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    if len(all_rows) < 2:
+        raise HTTPException(status_code=422, detail="Fichier vide ou sans données.")
+
+    # ── Mapper les colonnes (comparaison lowercase directe) ───────────────────
+    raw_header = [str(c) if c is not None else "" for c in all_rows[0]]
+    header_lower = [h.strip().lower() for h in raw_header]
+
+    HEADER_ALIASES: dict[str, list[str]] = {
+        "nom":       ["nom de l'école", "nom de l ecole", "nom", "name", "école", "ecole", "school"],
+        "region":    ["région (ief)", "region (ief)", "région", "region", "ief"],
+        "commune":   ["commune / ville", "commune/ville", "commune", "ville", "city"],
+        "directeur": ["directeur(trice)", "directeur", "director"],
+        "phone":     ["téléphone", "telephone", "phone", "tel"],
+    }
+    col_idx: dict[str, int] = {}
+    for field, aliases in HEADER_ALIASES.items():
+        for i, h in enumerate(header_lower):
+            if h in aliases and field not in col_idx:
+                col_idx[field] = i
+                break
+
+    if "nom" not in col_idx:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Colonne 'Nom de l\\'école' introuvable. Exportez d'abord depuis la plateforme. Colonnes détectées : {raw_header}",
+        )
+
+    def col(row: tuple, name: str) -> str:
+        idx = col_idx.get(name)
+        if idx is None or idx >= len(row):
+            return ""
+        v = row[idx]
+        return str(v).strip() if v is not None else ""
+
+    # ── Charger les écoles et téléphones existants (1 requête) ────────────────
+    all_schools_db = (await db.execute(select(School))).scalars().all()
+    school_by_name: dict[str, School] = {s.name.strip().upper(): s for s in all_schools_db}
+    phone_to_id: dict[str, str] = {
+        s.director_phone: str(s.id)
+        for s in all_schools_db
+        if s.director_phone
+    }
+
+    updated = 0
+    created = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for line_num, row in enumerate(all_rows[1:], start=2):
+        if all(not str(v or "").strip() for v in row):
+            continue
+
+        nom = col(row, "nom")
+        if not nom:
+            skipped += 1
+            continue
+
+        region    = col(row, "region")    or None
+        commune   = col(row, "commune")   or None
+        directeur = col(row, "directeur") or None
+        phone     = col(row, "phone")     or None
+
+        key = nom.strip().upper()
+        existing = school_by_name.get(key)
+
+        # Vérification unicité téléphone
+        if phone:
+            conflict_id = phone_to_id.get(phone)
+            if conflict_id and (existing is None or conflict_id != str(existing.id)):
+                errors.append(f"Ligne {line_num} — {nom} : le téléphone {phone} est déjà utilisé par une autre école.")
+                skipped += 1
+                continue
+
+        if existing:
+            changed = False
+            if region is not None and existing.region != region:
+                existing.region = region; changed = True
+            if commune is not None and existing.city != commune:
+                existing.city = commune; changed = True
+            if directeur is not None and existing.director != directeur:
+                existing.director = directeur; changed = True
+            if phone and existing.director_phone != phone:
+                if existing.director_phone:
+                    phone_to_id.pop(existing.director_phone, None)
+                existing.director_phone = phone
+                phone_to_id[phone] = str(existing.id)
+                changed = True
+            if changed:
+                updated += 1
+            else:
+                skipped += 1
+        else:
+            school = School(
+                name=nom.strip(),
+                region=region,
+                city=commune,
+                director=directeur,
+                director_phone=phone,
+            )
+            db.add(school)
+            await db.flush()
+            await db.refresh(school)
+            school_by_name[key] = school
+            if phone:
+                phone_to_id[phone] = str(school.id)
+            created += 1
+
+    return {
+        "updated": updated,
+        "created": created,
+        "skipped": skipped,
+        "errors":  errors,
+    }
+
+
 # ── Routes paramétrées — après les routes fixes ──────────────────────────────
 
 @router.get("/{school_id}", response_model=SchoolResponse)
