@@ -1,7 +1,7 @@
 """Indexes de performance — rapports_journalier + seances
 
 Revision ID: g4h5i6j7k8l9
-Revises: f3a1c8e2b945
+Revises: 9f1e2d3c4b5a
 Create Date: 2026-06-16
 
 Ajoute les index manquants qui causent des full-table-scans :
@@ -16,7 +16,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "g4h5i6j7k8l9"
-down_revision = "f3a1c8e2b945"
+down_revision = "9f1e2d3c4b5a"
 branch_labels = None
 depends_on = None
 
