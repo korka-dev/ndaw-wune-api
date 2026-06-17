@@ -7,7 +7,7 @@ from app.api.routes.admin import (
     suivi_seances, suivi_superviseurs, suivi_plannings, suivi_evaluations,
     rapports_journalier as admin_rapports_journalier,
     ressources, classes, rapport_questions, evaluation_competences,
-    audit_logs,
+    audit_logs, dashboard_stats,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -45,6 +45,7 @@ api_router.include_router(ressources.router,               prefix="/admin")
 api_router.include_router(rapport_questions.router,         prefix="/admin")
 api_router.include_router(evaluation_competences.router,    prefix="/admin")
 api_router.include_router(audit_logs.router,                prefix="/admin")
+api_router.include_router(dashboard_stats.router,           prefix="/admin")  # GET /admin/dashboard/stats
 
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")
