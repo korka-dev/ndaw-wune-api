@@ -11,9 +11,9 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.deps import DB, SuperviseurUser
 from app.models.eleve import Eleve
@@ -36,14 +36,20 @@ class EleveItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ClasseGroup(BaseModel):
-    classe:   str
+class ClasseMeta(BaseModel):
+    """Métadonnées légères d'une classe — pas d'élèves, seulement le comptage."""
+    classe:    str
     nb_eleves: int
-    eleves:   list[EleveItem]
+
+
+class TeacherPayload(BaseModel):
+    teacher_id:   str
+    teacher_name: str
+    classes:      list[ClasseMeta] = []
 
 
 class ElevesPayload(BaseModel):
-    classes: list[ClasseGroup]
+    teachers: list[TeacherPayload]
 
 
 class EvaluationIn(BaseModel):
@@ -78,17 +84,12 @@ class EvaluationsPayload(BaseModel):
 @router.get("/eleves", response_model=ElevesPayload)
 async def supervisor_eleves(current_user: SuperviseurUser, db: DB) -> ElevesPayload:
     """
-    Retourne les élèves des classes supervisées, groupés par classe.
-
-    Logique :
-      1. Les UUIDs des enseignants assignés sont dans current_user.classes.
-      2. Pour chaque enseignant, on récupère son school_id et ses classes.
-      3. On charge les élèves correspondants (school_id + classe).
+    Retourne TOUS les enseignants assignés + métadonnées de leurs classes (comptages uniquement).
+    Les élèves détaillés sont chargés à la demande via GET /classe-eleves.
     """
     if not current_user.classes:
-        return ElevesPayload(classes=[])
+        return ElevesPayload(teachers=[])
 
-    # Récupérer les enseignants assignés
     teacher_ids: list[uuid.UUID] = []
     for id_str in current_user.classes:
         try:
@@ -97,52 +98,79 @@ async def supervisor_eleves(current_user: SuperviseurUser, db: DB) -> ElevesPayl
             continue
 
     if not teacher_ids:
-        return ElevesPayload(classes=[])
+        return ElevesPayload(teachers=[])
 
     teachers_result = await db.execute(
         select(User).where(User.id.in_(teacher_ids))
     )
     teachers = teachers_result.scalars().all()
 
-    # Construire les paires (school_id, classe) à interroger
-    school_classe_pairs: list[tuple[uuid.UUID, str]] = []
+    result_teachers: list[TeacherPayload] = []
+
     for teacher in teachers:
+        classes_meta: list[ClasseMeta] = []
+
         if teacher.school_id and teacher.classes:
             for cls in teacher.classes:
-                school_classe_pairs.append((teacher.school_id, cls))
+                # Un seul COUNT par classe — très léger
+                count_result = await db.execute(
+                    select(func.count()).where(
+                        Eleve.school_id == teacher.school_id,
+                        Eleve.classe == cls,
+                        Eleve.statut == "actif",
+                    )
+                )
+                nb = count_result.scalar() or 0
+                classes_meta.append(ClasseMeta(classe=cls, nb_eleves=nb))
 
-    if not school_classe_pairs:
-        return ElevesPayload(classes=[])
+        result_teachers.append(TeacherPayload(
+            teacher_id=str(teacher.id),
+            teacher_name=teacher.name or "Enseignant sans nom",
+            classes=sorted(classes_meta, key=lambda c: c.classe),
+        ))
 
-    # Charger les élèves (requête par école+classe)
-    all_eleves: list[Eleve] = []
-    seen_pairs: set[tuple[uuid.UUID, str]] = set()
-    for school_id, classe in school_classe_pairs:
-        if (school_id, classe) in seen_pairs:
-            continue
-        seen_pairs.add((school_id, classe))
-        result = await db.execute(
-            select(Eleve)
-            .where(Eleve.school_id == school_id, Eleve.classe == classe, Eleve.statut == "actif")
-            .order_by(Eleve.nom)
+    result_teachers.sort(key=lambda t: t.teacher_name)
+    return ElevesPayload(teachers=result_teachers)
+
+
+@router.get("/classe-eleves", response_model=list[EleveItem])
+async def get_classe_eleves(
+    current_user: SuperviseurUser,
+    db: DB,
+    teacher_id: str = Query(...),
+    classe: str = Query(...),
+) -> list[EleveItem]:
+    """
+    Charge les élèves d'une classe spécifique, à la demande (lazy loading).
+    Vérifie que l'enseignant est bien assigné à ce superviseur.
+    """
+    # Vérifier que cet enseignant est bien assigné à ce superviseur
+    if teacher_id not in (current_user.classes or []):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Enseignant non assigné.")
+
+    try:
+        tid = uuid.UUID(teacher_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="teacher_id invalide.")
+
+    teacher_result = await db.execute(select(User).where(User.id == tid))
+    teacher = teacher_result.scalar_one_or_none()
+    if not teacher or not teacher.school_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enseignant introuvable.")
+
+    eleve_result = await db.execute(
+        select(Eleve)
+        .where(
+            Eleve.school_id == teacher.school_id,
+            Eleve.classe == classe,
+            Eleve.statut == "actif",
         )
-        all_eleves.extend(result.scalars().all())
-
-    # Grouper par classe
-    groups: dict[str, list[EleveItem]] = {}
-    for e in all_eleves:
-        item = EleveItem(
-            id=str(e.id), nom=e.nom, prenom=e.prenom,
-            genre=e.genre, classe=e.classe,
-        )
-        groups.setdefault(e.classe, []).append(item)
-
-    return ElevesPayload(
-        classes=[
-            ClasseGroup(classe=cls, nb_eleves=len(items), eleves=items)
-            for cls, items in sorted(groups.items())
-        ]
+        .order_by(Eleve.nom)
     )
+    return [
+        EleveItem(id=str(e.id), nom=e.nom, prenom=e.prenom, genre=e.genre, classe=e.classe)
+        for e in eleve_result.scalars().all()
+    ]
 
 
 @router.get("/evaluations", response_model=EvaluationsPayload)
@@ -201,7 +229,7 @@ async def list_evaluations(
     return EvaluationsPayload(evaluations=items, total=len(items))
 
 
-RESULTATS_VALIDES = {"acquis", "en_cours", "a_aider"}
+RESULTATS_VALIDES = {"acquis", "a_aider"}
 
 
 @router.post("/evaluations", status_code=status.HTTP_201_CREATED)

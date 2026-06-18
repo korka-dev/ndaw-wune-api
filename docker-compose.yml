@@ -5,6 +5,7 @@ services:
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
+    pull_policy: never
     restart: unless-stopped
     environment:
       POSTGRES_DB:       ${POSTGRES_DB}
@@ -24,6 +25,7 @@ services:
   # ── Redis ───────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
+    pull_policy: never
     restart: unless-stopped
     command: >
       sh -c "
