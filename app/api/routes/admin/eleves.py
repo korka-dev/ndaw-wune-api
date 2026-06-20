@@ -41,6 +41,17 @@ def _normalize_header(h: str) -> str:
     return h.strip().lower().replace(" ", "_").replace("-", "_")
 
 
+def _normalize_genre(v: str | None) -> str | None:
+    if not v:
+        return None
+    v_lower = v.strip().lower()
+    if v_lower in ("m", "male", "masculin", "garcon", "garçon", "boy", "h", "homme"):
+        return "Garçon"
+    if v_lower in ("f", "female", "feminin", "féminin", "fille", "girl"):
+        return "Fille"
+    return v.strip() or None
+
+
 def _map_headers(raw_headers: list[str]) -> dict[str, str]:
     """
     Retourne un dict {colonne_interne → header_original} pour les colonnes reconnues.
@@ -67,7 +78,7 @@ def _row_to_eleve_kwargs(row: dict[str, str], col_map: dict[str, str]) -> dict |
     return {
         "nom":            nom,
         "prenom":         get("prenom") or None,
-        "genre":          get("genre") or None,
+        "genre":          _normalize_genre(get("genre")),
         "date_naissance": get("date_naissance") or None,
         "classe":         classe,
         "statut":         get("statut") or "actif",

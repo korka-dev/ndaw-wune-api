@@ -143,6 +143,19 @@ async def update_user(db: AsyncSession, user_id: uuid.UUID, body: UserUpdate) ->
     if "password" in data:
         user.password_hash = hash_password(data.pop("password"))
 
+    # Quand un enseignant change d'école, le retirer des listes de superviseurs de l'ancienne école
+    if "school_id" in data and data["school_id"] != user.school_id and user.role == UserRole.enseignant:
+        teacher_id_str = str(user_id)
+        sups = (await db.execute(
+            select(User).where(
+                User.role.in_([UserRole.superviseur, UserRole.coordonnateur]),
+                User.classes.contains([teacher_id_str]),
+            )
+        )).scalars().all()
+        for sup in sups:
+            if sup.classes:
+                sup.classes = [c for c in sup.classes if c != teacher_id_str]
+
     for field, value in data.items():
         setattr(user, field, value)
 

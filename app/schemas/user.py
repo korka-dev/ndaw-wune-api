@@ -18,7 +18,11 @@ def _normalize_sn_phone(v: Optional[str]) -> Optional[str]:
         digits = digits[3:]
     elif len(digits) == 14 and digits.startswith("00221"):
         digits = digits[5:]
-    return digits if digits else None
+    if not digits:
+        return None
+    if len(digits) != 9:
+        raise ValueError("Le numéro de téléphone doit contenir exactement 9 chiffres.")
+    return digits
 
 
 # ── Création ──────────────────────────────────────────────────────────────────

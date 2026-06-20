@@ -4,7 +4,9 @@ Accessible aux enseignants ET aux superviseurs (MobileUser).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+import uuid
+
+from fastapi import APIRouter, HTTPException, Response, status
 
 from app.core.deps import DB, MobileUser
 from app.core.pagination import Page, Pagination
@@ -44,3 +46,23 @@ async def list_rapports_journalier(
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     items = (await db.execute(base.offset(page.skip).limit(page.limit))).scalars().all()
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
+
+
+@router.delete("/{rapport_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rapport_journalier(
+    rapport_id: uuid.UUID,
+    current_user: MobileUser,
+    db: DB,
+) -> Response:
+    """Supprime un rapport journalier appartenant à l'utilisateur connecté."""
+    result = await db.execute(
+        select(RapportJournalier).where(
+            RapportJournalier.id == rapport_id,
+            RapportJournalier.teacher_id == current_user.id,
+        )
+    )
+    rapport = result.scalar_one_or_none()
+    if rapport is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rapport introuvable.")
+    await db.delete(rapport)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
