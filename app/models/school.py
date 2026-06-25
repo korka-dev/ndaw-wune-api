@@ -12,6 +12,7 @@ class School(Base, UUIDMixin, TimestampMixin):
     )
 
     name:            Mapped[str]           = mapped_column(String(255), nullable=False)
+    code_ecole:      Mapped[Optional[int]] = mapped_column(nullable=True, unique=True, index=True)
     region:          Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     city:            Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     director:        Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

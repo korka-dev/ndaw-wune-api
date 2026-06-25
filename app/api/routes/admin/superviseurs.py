@@ -7,17 +7,23 @@ avec le rôle 'coordonnateur' (avant la migration a9f1b2c3d4e5).
 """
 from __future__ import annotations
 
+import csv
+import io
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from sqlalchemy import or_
 
 from app.core.deps import AdminUser, DB
+from app.core.export_utils import build_xlsx_response
 from app.core.pagination import Page, Pagination
 from app.models.user import User, UserRole
+from app.models.school import School
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.services import user_service
 
@@ -36,11 +42,10 @@ async def list_superviseurs(db: DB, _: AdminUser, page: Pagination) -> Page[User
         .where(
             or_(
                 User.role == UserRole.superviseur,
-                # Rétrocompat : coordonnateurs qui n'ont pas encore été migrés
-                # et qui ne sont pas des évaluateurs
                 (User.role == UserRole.coordonnateur) & (User.title != "evaluateur"),
             )
         )
+        .options(selectinload(User.school))
         .order_by(User.name)
     )
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
@@ -52,6 +57,81 @@ async def list_superviseurs(db: DB, _: AdminUser, page: Pagination) -> Page[User
 async def create_superviseur(body: UserCreate, db: DB, _: AdminUser) -> UserResponse:
     """Crée un superviseur avec le rôle 'superviseur' (app mobile — onglets superviseur)."""
     return await user_service.create_user(db, body, force_role=UserRole.superviseur)
+
+
+def _superviseur_filter():
+    return or_(
+        User.role == UserRole.superviseur,
+        (User.role == UserRole.coordonnateur) & (User.title != "evaluateur"),
+    )
+
+
+@router.get("/export/csv")
+async def export_superviseurs_csv(db: DB, _: AdminUser) -> StreamingResponse:
+    """Export CSV de tous les superviseurs avec leur école et nb d'enseignants assignés."""
+    items = (await db.execute(
+        select(User)
+        .where(_superviseur_filter())
+        .options(selectinload(User.school))
+        .order_by(User.name)
+    )).scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["nom", "telephone", "ecole", "code_ecole", "nb_enseignants", "statut"])
+    for s in items:
+        writer.writerow([
+            s.name,
+            s.phone or "",
+            s.school.name if s.school else "",
+            s.school.code_ecole if s.school and s.school.code_ecole is not None else "",
+            len(s.classes or []),
+            s.status,
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=superviseurs.csv"},
+    )
+
+
+@router.get("/export/xlsx")
+async def export_superviseurs_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None) -> StreamingResponse:
+    """Export Excel des superviseurs."""
+    items = (await db.execute(
+        select(User)
+        .where(_superviseur_filter())
+        .options(selectinload(User.school))
+        .order_by(User.name)
+    )).scalars().all()
+
+    columns = [
+        ("nom",             "Nom complet",          30),
+        ("telephone",       "Téléphone",            18),
+        ("ecole",           "École",                35),
+        ("code_ecole",      "Code école",           12),
+        ("nb_enseignants",  "Nb enseignants",       15),
+        ("statut",          "Statut",               12),
+    ]
+    rows = [
+        [
+            s.name,
+            s.phone or "",
+            s.school.name if s.school else "",
+            s.school.code_ecole if s.school and s.school.code_ecole is not None else "",
+            len(s.classes or []),
+            s.status,
+        ]
+        for s in items
+    ]
+    return build_xlsx_response(
+        sheet_title="Superviseurs",
+        columns=columns,
+        rows=rows,
+        fields=fields,
+        filename="superviseurs.xlsx",
+    )
 
 
 @router.get("/{superviseur_id}", response_model=UserResponse)

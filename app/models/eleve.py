@@ -20,6 +20,7 @@ class Eleve(Base, UUIDMixin, TimestampMixin):
 
     nom:             Mapped[str]           = mapped_column(String(100), nullable=False)
     prenom:          Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    code_eleve:      Mapped[Optional[str]] = mapped_column(String(30),  nullable=True, index=True)
     classe:          Mapped[str]           = mapped_column(String(50),  nullable=False)
     genre:           Mapped[Optional[str]] = mapped_column(String(20),  nullable=True)
     date_naissance:  Mapped[Optional[str]] = mapped_column(String(10),  nullable=True)  # ISO YYYY-MM-DD
