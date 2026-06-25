@@ -13,6 +13,7 @@ class DocumentResponse(BaseModel):
     mime_type: str
     file_size: int
     description: str | None
+    resource_type: str = "document"
     uploaded_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime

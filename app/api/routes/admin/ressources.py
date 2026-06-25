@@ -44,6 +44,7 @@ async def upload_document(
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
     description: str | None = Form(default=None),
+    resource_type: str | None = Form(default=None),
 ) -> DocumentResponse:
     content = await file.read()
     file_size = len(content)
@@ -71,6 +72,16 @@ async def upload_document(
     # Titre par défaut = nom du fichier sans extension
     effective_title = (title or "").strip() or Path(original_filename).stem
 
+    # Déterminer le type de ressource
+    valid_types = {"document", "video", "autre"}
+    effective_type = (resource_type or "").strip().lower()
+    if effective_type not in valid_types:
+        # Auto-détecter depuis le MIME si non fourni
+        if mime_type.startswith("video/"):
+            effective_type = "video"
+        else:
+            effective_type = "document"
+
     doc = Document(
         title=effective_title,
         original_filename=original_filename,
@@ -78,6 +89,7 @@ async def upload_document(
         mime_type=mime_type,
         file_size=file_size,
         description=(description or "").strip() or None,
+        resource_type=effective_type,
         uploaded_by=current_user.id,
     )
     db.add(doc)

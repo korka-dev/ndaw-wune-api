@@ -14,6 +14,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 from app.core.deps import AdminUser, DB
+from app.models.rapport_journalier import RapportJournalier
 from app.models.seance import RapportProf, Seance, SeanceStatus
 from app.models.user import User, UserRole
 
@@ -42,17 +43,25 @@ class TeacherPresenceItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class SuperviseurSuiviItem(BaseModel):
-    superviseur_id: str
+class TuteurEnAlerte(BaseModel):
+    teacher_id:     str
     name:           str
-    title:          Optional[str] = None
-    phone:          Optional[str] = None
-    email:          Optional[str] = None
-    school_name:    Optional[str] = None
-    total_assignes: int           = 0
-    presents:       int           = 0
-    en_cours:       int           = 0
-    absents:        int           = 0
+    rapports_manques: int   # nombre de jours sans rapport (7 derniers jours)
+
+
+class SuperviseurSuiviItem(BaseModel):
+    superviseur_id:     str
+    name:               str
+    title:              Optional[str]       = None
+    phone:              Optional[str]       = None
+    email:              Optional[str]       = None
+    school_name:        Optional[str]       = None
+    total_assignes:     int                 = 0
+    presents:           int                 = 0
+    en_cours:           int                 = 0
+    absents:            int                 = 0
+    # Alerte rapports : tuteurs avec 3+ jours sans rapport sur les 7 derniers jours
+    tuteurs_en_alerte:  list[TuteurEnAlerte] = []
 
     model_config = {"from_attributes": True}
 
@@ -70,6 +79,33 @@ class SuperviseurDetail(BaseModel):
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+async def _count_missed_reports(db, teacher_id: uuid.UUID, nb_days: int = 7) -> int:
+    """
+    Compte le nombre de jours ouvrés (lun–sam) des `nb_days` derniers jours
+    pour lesquels l'enseignant n'a pas soumis de rapport journalier.
+    """
+    from datetime import timedelta
+    today = date.today()
+    # Jours à vérifier : lundi–samedi des nb_days derniers jours calendaires
+    working_days: list[date] = []
+    d = today
+    while len(working_days) < nb_days:
+        if d.weekday() != 6:  # pas dimanche
+            working_days.append(d)
+        d -= timedelta(days=1)
+
+    # Rapports envoyés sur cette période
+    sent_result = await db.execute(
+        select(RapportJournalier.date_rapport).where(
+            RapportJournalier.teacher_id == teacher_id,
+            RapportJournalier.date_rapport.in_(working_days),
+        )
+    )
+    sent_dates = {r[0] for r in sent_result.all()}
+    missed = sum(1 for d in working_days if d not in sent_dates)
+    return missed
+
 
 def _parse_teacher_ids(classes: Optional[list[str]]) -> list[uuid.UUID]:
     """Extrait les UUIDs enseignants depuis le champ classes du superviseur."""
@@ -198,17 +234,33 @@ async def list_suivi_superviseurs(
             en_cours_count = len(seen_en_cours)
             presents       = len(seen_present - seen_en_cours)
 
+        # Vérifier les tuteurs en alerte (3+ rapports manquants sur 7 jours)
+        tuteurs_en_alerte: list[TuteurEnAlerte] = []
+        if teacher_ids:
+            teacher_users = (await db.execute(
+                select(User).where(User.id.in_(teacher_ids))
+            )).scalars().all()
+            for t in teacher_users:
+                missed = await _count_missed_reports(db, t.id)
+                if missed >= 3:
+                    tuteurs_en_alerte.append(TuteurEnAlerte(
+                        teacher_id=str(t.id),
+                        name=t.name,
+                        rapports_manques=missed,
+                    ))
+
         result.append(SuperviseurSuiviItem(
-            superviseur_id = str(sup.id),
-            name           = sup.name,
-            title          = sup.title,
-            phone          = sup.phone,
-            email          = sup.email,
-            school_name    = sup.school.name if sup.school else None,
-            total_assignes = total_assignes,
-            presents       = presents,
-            en_cours       = en_cours_count,
-            absents        = max(0, total_assignes - presents - en_cours_count),
+            superviseur_id    = str(sup.id),
+            name              = sup.name,
+            title             = sup.title,
+            phone             = sup.phone,
+            email             = sup.email,
+            school_name       = sup.school.name if sup.school else None,
+            total_assignes    = total_assignes,
+            presents          = presents,
+            en_cours          = en_cours_count,
+            absents           = max(0, total_assignes - presents - en_cours_count),
+            tuteurs_en_alerte = tuteurs_en_alerte,
         ))
 
     return result

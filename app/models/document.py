@@ -32,6 +32,9 @@ class Document(UUIDMixin, TimestampMixin, Base):
     # Description optionnelle
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    # Type de ressource : "document" | "video" | "autre"
+    resource_type: Mapped[str] = mapped_column(String(20), nullable=False, default="document")
+
     # Qui a uploadé le fichier
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
