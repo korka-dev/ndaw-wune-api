@@ -155,15 +155,29 @@ async def run(dry_run: bool = False) -> None:
             )
             migrated_teachers += t_result.rowcount
 
-            # Migrer les élèves
-            e_result = await session.execute(
-                update(Eleve)
-                .where(Eleve.school_id == old.id)
-                .values(school_id=new.id)
-            )
-            migrated_eleves += e_result.rowcount
+            # Migrer les élèves — supprimer les doublons, déplacer les uniques
+            old_eleves = (await session.execute(
+                select(Eleve).where(Eleve.school_id == old.id)
+            )).scalars().all()
 
-            # Migrer les classes (attention aux doublons de contrainte unique)
+            new_eleves_res = (await session.execute(
+                select(Eleve.classe, Eleve.nom, Eleve.prenom)
+                .where(Eleve.school_id == new.id)
+            )).all()
+            new_eleve_keys = {(r[0], r[1], r[2] or "") for r in new_eleves_res}
+
+            for eleve in old_eleves:
+                key = (eleve.classe, eleve.nom, eleve.prenom or "")
+                if key in new_eleve_keys:
+                    await session.execute(
+                        delete(Eleve).where(Eleve.id == eleve.id)
+                    )
+                else:
+                    eleve.school_id = new.id
+                    new_eleve_keys.add(key)
+                    migrated_eleves += 1
+
+            # Migrer les classes — supprimer les doublons, déplacer les uniques
             old_classes = (await session.execute(
                 select(SchoolClasse).where(SchoolClasse.school_id == old.id)
             )).scalars().all()
@@ -181,6 +195,8 @@ async def run(dry_run: bool = False) -> None:
                 else:
                     sc.school_id = new.id
                     migrated_classes += 1
+
+            await session.flush()
 
             # Supprimer l'ancienne école
             await session.execute(delete(School).where(School.id == old.id))
