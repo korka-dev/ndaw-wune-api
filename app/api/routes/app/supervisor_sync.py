@@ -15,10 +15,11 @@ from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.core.deps import DB, SuperviseurUser
 from app.models.evaluation_competence import EvaluationCompetence
+from app.models.seance import RapportProf
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
 
@@ -42,6 +43,7 @@ class AssignedTeacher(BaseModel):
     name:  str
     phone: Optional[str] = None
     email: Optional[str] = None
+    last_rapport_date: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -91,23 +93,44 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
 
     # ── Enseignants assignés (stockés dans supervisor.classes comme UUIDs) ────
     assigned_teachers: list[AssignedTeacher] = []
+    teacher_uuids: list[uuid.UUID] = []
     if current_user.classes:
         for id_str in current_user.classes:
             try:
-                teacher_uuid = uuid.UUID(id_str)
+                teacher_uuids.append(uuid.UUID(id_str))
             except ValueError:
                 continue
-            result = await db.execute(select(User).where(User.id == teacher_uuid))
-            teacher = result.scalar_one_or_none()
-            if teacher:
-                assigned_teachers.append(
-                    AssignedTeacher(
-                        id=str(teacher.id),
-                        name=teacher.name,
-                        phone=teacher.phone,
-                        email=teacher.email,
-                    )
+
+    # Récupérer la date du dernier rapport pour chaque enseignant en un seul query
+    last_rapport_map: dict[uuid.UUID, datetime] = {}
+    if teacher_uuids:
+        last_rapports = (
+            await db.execute(
+                select(
+                    RapportProf.teacher_id,
+                    func.max(RapportProf.created_at).label("last_date"),
                 )
+                .where(RapportProf.teacher_id.in_(teacher_uuids))
+                .group_by(RapportProf.teacher_id)
+            )
+        ).all()
+        for row in last_rapports:
+            last_rapport_map[row.teacher_id] = row.last_date
+
+    for teacher_uuid in teacher_uuids:
+        result = await db.execute(select(User).where(User.id == teacher_uuid))
+        teacher = result.scalar_one_or_none()
+        if teacher:
+            last_date = last_rapport_map.get(teacher_uuid)
+            assigned_teachers.append(
+                AssignedTeacher(
+                    id=str(teacher.id),
+                    name=teacher.name,
+                    phone=teacher.phone,
+                    email=teacher.email,
+                    last_rapport_date=last_date.isoformat() if last_date else None,
+                )
+            )
 
     # ── Session active ────────────────────────────────────────────────────────
     active_session: ActiveSessionInfo | None = None
