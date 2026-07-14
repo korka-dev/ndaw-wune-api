@@ -44,6 +44,13 @@ class User(Base, UUIDMixin, TimestampMixin):
         nullable=False,
     )
 
+    # ── Accès aux fonctionnalités de l'app mobile ─────────────────────────────
+    # "full"       : accès à toutes les fonctionnalités
+    # "timer_only" : accès uniquement à la fonctionnalité Timer (planning)
+    app_access: Mapped[str] = mapped_column(
+        String(20), default="full", server_default="full", nullable=False
+    )
+
     # ── Premier connexion ─────────────────────────────────────────────────────
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False

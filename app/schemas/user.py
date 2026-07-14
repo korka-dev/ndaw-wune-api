@@ -39,6 +39,8 @@ class UserCreate(BaseModel):
     school_id: Optional[uuid.UUID] = None
     niveau:    Optional[List[str]] = None
     classes:   Optional[List[str]] = None
+    # Accès app mobile : "full" (toutes fonctionnalités) ou "timer_only" (Timer uniquement)
+    app_access: Optional[str]      = None
 
     @field_validator("name")
     @classmethod
@@ -71,6 +73,7 @@ class UserUpdate(BaseModel):
     school_id: Optional[uuid.UUID]  = None
     niveau:    Optional[List[str]]  = None
     classes:   Optional[List[str]]  = None
+    app_access: Optional[str]       = None
 
     @field_validator("phone")
     @classmethod
@@ -99,6 +102,7 @@ class UserResponse(BaseModel):
     school_id:           Optional[uuid.UUID]
     niveau:              Optional[List[str]]
     classes:             Optional[List[str]]
+    app_access:          str = "full"
     must_change_password: bool
     school:              Optional[SchoolBrief] = None
 

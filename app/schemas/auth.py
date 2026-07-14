@@ -61,6 +61,7 @@ class MeResponse(BaseModel):
     status:              str
     title:               Optional[str]
     school_id:           Optional[str]
+    app_access:          str = "full"
     must_change_password: bool = False
 
     model_config = {"from_attributes": True}

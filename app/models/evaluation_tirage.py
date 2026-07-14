@@ -5,7 +5,7 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,8 +42,11 @@ class EvaluationTirage(Base, UUIDMixin, TimestampMixin):
         index=True,
     )
 
-    # Résultat de l'évaluation
-    resultat: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)   # acquis | a_aider
+    # Présence de l'élève tiré au sort (None = pas encore vérifiée par le superviseur)
+    present: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
+    # Résultat de l'évaluation : reussi | intermediaire | pas_reussi (anciens : acquis | a_aider)
+    resultat: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     commentaire: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     date_eval: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
 

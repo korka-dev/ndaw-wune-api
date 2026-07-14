@@ -8,6 +8,7 @@ class PlanningSegmentCreate(BaseModel):
     session_id:  uuid.UUID
     teacher_id:  Optional[uuid.UUID] = None
     school_id:   Optional[uuid.UUID] = None
+    semaine:     Optional[int] = None
     jour:        int
     heure_debut: time
     heure_fin:   time
@@ -29,6 +30,7 @@ class PlanningSegmentCreate(BaseModel):
 
 
 class PlanningSegmentUpdate(BaseModel):
+    semaine:     Optional[int]  = None
     jour:        Optional[int]  = None
     heure_debut: Optional[time] = None
     heure_fin:   Optional[time] = None
@@ -42,6 +44,7 @@ class PlanningSegmentResponse(BaseModel):
     session_id:  uuid.UUID
     teacher_id:  Optional[uuid.UUID] = None
     school_id:   Optional[uuid.UUID] = None
+    semaine:     Optional[int] = None
     jour:        int
     heure_debut: time
     heure_fin:   time

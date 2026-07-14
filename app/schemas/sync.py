@@ -14,6 +14,7 @@ class SyncProfile(BaseModel):
     role:      str
     school_id: Optional[uuid.UUID]
     classes:   Optional[List[str]]
+    app_access: str = "full"
 
     model_config = {"from_attributes": True}
 
@@ -41,6 +42,7 @@ class SyncSession(BaseModel):
 
 class SyncPlanningSegment(BaseModel):
     id:          uuid.UUID
+    semaine:     Optional[int] = None
     jour:        int
     heure_debut: time
     heure_fin:   time

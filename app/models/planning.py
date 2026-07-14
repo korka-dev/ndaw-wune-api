@@ -31,6 +31,9 @@ class PlanningSegment(Base, UUIDMixin, TimestampMixin):
         index=True,
     )
 
+    # Semaine du programme concernée (1, 2, 3…) — None = toutes les semaines
+    semaine:     Mapped[Optional[int]]  = mapped_column(Integer, nullable=True, index=True)
+
     jour:        Mapped[int]            = mapped_column(Integer, nullable=False)
     heure_debut: Mapped[time]           = mapped_column(Time, nullable=False)
     heure_fin:   Mapped[time]           = mapped_column(Time, nullable=False)
@@ -38,7 +41,7 @@ class PlanningSegment(Base, UUIDMixin, TimestampMixin):
     matiere:     Mapped[Optional[str]]  = mapped_column(String(100), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("session_id", "jour", "heure_debut", name="uq_planning_segment"),
+        UniqueConstraint("session_id", "semaine", "jour", "heure_debut", name="uq_planning_segment"),
     )
 
     session: Mapped["ProgramSession"] = relationship("ProgramSession", back_populates="planning_segments")

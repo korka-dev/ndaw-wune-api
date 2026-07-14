@@ -119,6 +119,8 @@ async def create_user(
     password = body.password if body.password else _DEFAULT_PASSWORD
 
     data = body.model_dump(exclude={"password"})
+    if data.get("app_access") is None:
+        data["app_access"] = "full"
     data["password_hash"]      = hash_password(password)
     data["must_change_password"] = True     # toujours forcé à la création
     if force_role:

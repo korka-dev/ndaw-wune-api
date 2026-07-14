@@ -17,3 +17,5 @@ from app.models.supervisor_presence import SupervisorPresenceCheck  # noqa: F401
 from app.models.audit_log import AuditLog                           # noqa: F401
 from app.models.rapport_question import RapportQuestion             # noqa: F401
 from app.models.school_classe import SchoolClasse                   # noqa: F401
+from app.models.usage_log import UsageLog                            # noqa: F401
+from app.models.remarque import Remarque                             # noqa: F401

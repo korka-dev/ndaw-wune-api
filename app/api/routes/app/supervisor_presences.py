@@ -34,6 +34,9 @@ class PresenceEntryIn(BaseModel):
 
 class PresenceCheckIn(BaseModel):
     date_jour: str       # ISO YYYY-MM-DD
+    # Période du programme choisie par le superviseur avant le pointage
+    semaine:    Optional[int] = None
+    jour_cours: Optional[int] = None
     entries:   list[PresenceEntryIn]
 
 
@@ -45,6 +48,8 @@ class PresenceEntryOut(BaseModel):
 
 class PresenceCheckOut(BaseModel):
     date_jour: str
+    semaine:    Optional[int] = None
+    jour_cours: Optional[int] = None
     entries:   list[PresenceEntryOut]
 
 
@@ -72,8 +77,11 @@ async def get_presence_check(
         )
     )).scalars().all()
 
+    first = rows[0] if rows else None
     return PresenceCheckOut(
         date_jour=target_date.isoformat(),
+        semaine=first.semaine if first else None,
+        jour_cours=first.jour_cours if first else None,
         entries=[
             PresenceEntryOut(teacher_id=str(r.teacher_id), present=r.present, motif=r.motif)
             for r in rows
@@ -120,6 +128,8 @@ async def submit_presence_check(
         if existing:
             existing.present   = entry.present
             existing.motif     = entry.motif if not entry.present else None
+            existing.semaine   = body.semaine
+            existing.jour_cours = body.jour_cours
             existing.updated_at = now
             updated += 1
         else:
@@ -128,6 +138,8 @@ async def submit_presence_check(
                 superviseur_id=current_user.id,
                 teacher_id=teacher_uuid,
                 date_jour=target_date,
+                semaine=body.semaine,
+                jour_cours=body.jour_cours,
                 present=entry.present,
                 motif=entry.motif if not entry.present else None,
                 created_at=now,

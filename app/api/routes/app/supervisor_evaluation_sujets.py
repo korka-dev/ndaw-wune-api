@@ -36,6 +36,7 @@ class TirageAppOut(BaseModel):
     eleve_prenom: Optional[str] = None
     eleve_genre: Optional[str] = None
     eleve_classe: str
+    present: Optional[bool] = None
     resultat: Optional[str] = None
     commentaire: Optional[str] = None
     audio_url: Optional[str] = None
@@ -133,6 +134,7 @@ async def list_evaluation_sujets(
                     eleve_prenom=e.prenom,
                     eleve_genre=e.genre,
                     eleve_classe=e.classe or "",
+                    present=t.present,
                     resultat=t.resultat,
                     commentaire=t.commentaire,
                     audio_url=_audio_url(t.audio_filename),
@@ -150,6 +152,50 @@ async def list_evaluation_sujets(
             ))
 
     return result
+
+
+class TiragePresenceEntry(BaseModel):
+    tirage_id: str
+    present:   bool
+
+
+class TiragePresenceIn(BaseModel):
+    entries: list[TiragePresenceEntry]
+
+
+@router.post("/evaluation-tirages/presences", status_code=status.HTTP_200_OK)
+async def set_tirages_presence(
+    body: TiragePresenceIn,
+    current_user: SuperviseurUser,
+    db: DB,
+) -> dict:
+    """
+    Marque en lot la présence/absence des élèves tirés au sort, avant de
+    démarrer l'évaluation. Les élèves absents ne seront pas évalués.
+    """
+    if not body.entries:
+        raise HTTPException(status_code=422, detail="La liste de présences est vide.")
+
+    updated = 0
+    for entry in body.entries:
+        try:
+            tid = uuid.UUID(entry.tirage_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"tirage_id invalide : {entry.tirage_id}")
+
+        tirage = (await db.execute(
+            select(EvaluationTirage).where(EvaluationTirage.id == tid)
+        )).scalar_one_or_none()
+        if tirage is None:
+            continue
+
+        tirage.present = entry.present
+        tirage.superviseur_id = current_user.id
+        tirage.updated_at = datetime.now(timezone.utc)
+        updated += 1
+
+    await db.commit()
+    return {"status": "ok", "updated": updated}
 
 
 @router.post("/evaluation-tirages/{tirage_id}/submit", status_code=status.HTTP_200_OK)
@@ -172,8 +218,11 @@ async def submit_tirage(
     if tirage is None:
         raise HTTPException(status_code=404, detail="Tirage introuvable.")
 
-    if resultat not in ("acquis", "a_aider"):
-        raise HTTPException(status_code=422, detail="Résultat invalide : 'acquis' ou 'a_aider'.")
+    if resultat not in ("reussi", "intermediaire", "pas_reussi", "acquis", "a_aider"):
+        raise HTTPException(
+            status_code=422,
+            detail="Résultat invalide : 'reussi', 'intermediaire' ou 'pas_reussi'.",
+        )
 
     # Sauvegarde de l'audio
     if audio and audio.filename:

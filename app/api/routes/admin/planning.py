@@ -275,6 +275,7 @@ def _enrich(seg: PlanningSegment, teacher_name: str | None = None) -> PlanningSe
         id=seg.id,
         session_id=seg.session_id,
         teacher_id=seg.teacher_id,
+        semaine=seg.semaine,
         jour=seg.jour,
         heure_debut=seg.heure_debut,
         heure_fin=seg.heure_fin,
@@ -290,21 +291,23 @@ async def list_planning(
     _: AdminUser,
     page: Pagination,
     session_id: uuid.UUID | None = None,
+    semaine: int | None = None,
 ) -> Page[PlanningSegmentResponse]:
     base = (
         select(PlanningSegment, User.name)
         .outerjoin(User, User.id == PlanningSegment.teacher_id)
-        .order_by(PlanningSegment.jour, PlanningSegment.heure_debut)
+        .order_by(PlanningSegment.semaine.nulls_first(), PlanningSegment.jour, PlanningSegment.heure_debut)
     )
+    count_q = select(PlanningSegment)
     if session_id:
-        base = base.where(PlanningSegment.session_id == session_id)
+        base    = base.where(PlanningSegment.session_id == session_id)
+        count_q = count_q.where(PlanningSegment.session_id == session_id)
+    if semaine is not None:
+        base    = base.where(PlanningSegment.semaine == semaine)
+        count_q = count_q.where(PlanningSegment.semaine == semaine)
 
     total = (await db.execute(
-        select(func.count()).select_from(
-            select(PlanningSegment).where(
-                PlanningSegment.session_id == session_id
-            ).subquery() if session_id else select(PlanningSegment).subquery()
-        )
+        select(func.count()).select_from(count_q.subquery())
     )).scalar_one()
 
     result = await db.execute(base.offset(page.skip).limit(page.limit))
@@ -329,7 +332,8 @@ async def update_segment(seg_id: uuid.UUID, body: PlanningSegmentUpdate, db: DB,
     seg = result.scalar_one_or_none()
     if not seg:
         raise HTTPException(status_code=404, detail="Créneau introuvable.")
-    for field, value in body.model_dump(exclude_none=True).items():
+    # exclude_unset (et non exclude_none) : permet d'effacer la semaine en envoyant null
+    for field, value in body.model_dump(exclude_unset=True).items():
         setattr(seg, field, value)
     await db.commit()
     await db.refresh(seg)
@@ -355,10 +359,13 @@ async def import_planning(
     db: DB,
     _: AdminUser,
     session_id: uuid.UUID,
+    semaine: int | None = None,
     file: UploadFile = File(...),
 ):
     """
     Importe un planning depuis un fichier PDF, Excel ou CSV.
+    Si `semaine` est fournie, le planning importé est rattaché à cette semaine
+    et seul le planning existant de cette semaine est remplacé.
 
     • PDF : emploi du temps Ndaw Wune (jours en majuscules, créneaux 16h00-16h05)
     • Excel / CSV : colonnes jour, heure_debut, heure_fin, matiere
@@ -379,10 +386,11 @@ async def import_planning(
     else:
         segments, errors = _parse_csv(content)
 
-    # Supprimer l'ancien planning de la session (remplacement complet)
-    await db.execute(
-        delete(PlanningSegment).where(PlanningSegment.session_id == session_id)
-    )
+    # Supprimer l'ancien planning (remplacement complet — limité à la semaine si fournie)
+    del_stmt = delete(PlanningSegment).where(PlanningSegment.session_id == session_id)
+    if semaine is not None:
+        del_stmt = del_stmt.where(PlanningSegment.semaine == semaine)
+    await db.execute(del_stmt)
 
     imported = 0
     for seg_data in segments:
@@ -390,7 +398,7 @@ async def import_planning(
             # Les parseurs retournent des strings "HH:MM" — asyncpg exige datetime.time
             seg_data["heure_debut"] = _dt.strptime(seg_data["heure_debut"], "%H:%M").time()
             seg_data["heure_fin"]   = _dt.strptime(seg_data["heure_fin"],   "%H:%M").time()
-            seg = PlanningSegment(session_id=session_id, **seg_data)
+            seg = PlanningSegment(session_id=session_id, semaine=semaine, **seg_data)
             db.add(seg)
             imported += 1
         except Exception as exc:

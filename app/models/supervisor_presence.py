@@ -5,7 +5,7 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +46,9 @@ class SupervisorPresenceCheck(Base, UUIDMixin, TimestampMixin):
         index=True,
     )
     date_jour: Mapped[date]            = mapped_column(Date, nullable=False, index=True)
+    # Période du programme (choisie par le superviseur avant le pointage)
+    semaine:    Mapped[Optional[int]]  = mapped_column(Integer, nullable=True)
+    jour_cours: Mapped[Optional[int]]  = mapped_column(Integer, nullable=True)
     present:   Mapped[bool]            = mapped_column(Boolean, nullable=False)
     motif:     Mapped[Optional[str]]   = mapped_column(String(200), nullable=True)
 
