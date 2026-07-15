@@ -67,17 +67,27 @@ class SujetDetail(SujetOut):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 async def _random_eleves(db, nb_par_classe: int) -> list[uuid.UUID]:
-    """Tire aléatoirement nb_par_classe élèves par classe (actifs)."""
-    # Récupère les classes distinctes
-    classes_result = await db.execute(
-        select(Eleve.classe).where(Eleve.statut == "actif").distinct()
+    """Tire aléatoirement nb_par_classe élèves par (school_id, classe) (actifs).
+
+    On tire par paire école+classe (et non par classe toutes écoles confondues)
+    afin que chaque superviseur voie les élèves de son école dans le tirage,
+    même quand plusieurs écoles ont des classes portant le même nom.
+    """
+    pairs_result = await db.execute(
+        select(Eleve.school_id, Eleve.classe)
+        .where(Eleve.statut == "actif")
+        .distinct()
     )
-    classes = [r[0] for r in classes_result.all() if r[0]]
+    pairs = [(r[0], r[1]) for r in pairs_result.all() if r[0] and r[1]]
 
     selected_ids: list[uuid.UUID] = []
-    for cls in classes:
+    for school_id, cls in pairs:
         eleves_result = await db.execute(
-            select(Eleve.id).where(Eleve.statut == "actif", Eleve.classe == cls)
+            select(Eleve.id).where(
+                Eleve.statut == "actif",
+                Eleve.school_id == school_id,
+                Eleve.classe == cls,
+            )
         )
         ids = [r[0] for r in eleves_result.all()]
         if nb_par_classe == 0 or nb_par_classe >= len(ids):
