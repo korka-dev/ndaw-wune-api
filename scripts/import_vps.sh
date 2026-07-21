@@ -29,20 +29,32 @@ BACKEND_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$BACKEND_DIR"
 
 # ── Vérifier que docker-compose.yml est là ────────────────────────────────────
-[ -f "docker-compose.yml" ] || err "docker-compose.yml introuvable. Lancez ce script depuis backend/ ou avec ./scripts/import_vps.sh"
+[ -f "docker-compose.yml" ] || err "docker-compose.yml introuvable. Lance ce script depuis ~/ndaw-wune/"
 
-# ── Installer les dépendances Python si manquantes ────────────────────────────
+# ── Environnement virtuel Python ──────────────────────────────────────────────
+VENV_DIR="$BACKEND_DIR/.venv-import"
+
+if [ ! -d "$VENV_DIR" ]; then
+  log "Création de l'environnement virtuel Python..."
+  python3 -m venv "$VENV_DIR"
+  success "Environnement virtuel créé : $VENV_DIR"
+fi
+
+PYTHON="$VENV_DIR/bin/python"
+PIP="$VENV_DIR/bin/pip"
+
+# ── Installer les dépendances dans le venv ────────────────────────────────────
 log "Vérification des dépendances Python..."
 
 MISSING=()
-python3 -c "import pandas"   2>/dev/null || MISSING+=("pandas")
-python3 -c "import bcrypt"   2>/dev/null || MISSING+=("bcrypt")
-python3 -c "import openpyxl" 2>/dev/null || MISSING+=("openpyxl")
+"$PYTHON" -c "import pandas"   2>/dev/null || MISSING+=("pandas")
+"$PYTHON" -c "import bcrypt"   2>/dev/null || MISSING+=("bcrypt")
+"$PYTHON" -c "import openpyxl" 2>/dev/null || MISSING+=("openpyxl")
 
 if [ ${#MISSING[@]} -gt 0 ]; then
   warn "Modules manquants : ${MISSING[*]}"
-  log "Installation via pip3..."
-  pip3 install --user "${MISSING[@]}"
+  log "Installation dans le venv..."
+  "$PIP" install --quiet "${MISSING[@]}"
   success "Dépendances installées."
 else
   success "Dépendances Python OK."
@@ -52,4 +64,4 @@ fi
 echo ""
 log "Lancement de l'import depuis : $XLSX"
 echo ""
-python3 scripts/import_acteurs_nwv2026.py "$XLSX"
+"$PYTHON" scripts/import_acteurs_nwv2026.py "$XLSX"
