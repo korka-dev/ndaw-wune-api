@@ -224,19 +224,20 @@ def _parse_pdf(content: bytes) -> tuple[list[dict], list[dict]]:
     line_global = 0
 
     with pdfplumber.open(io.BytesIO(content)) as pdf:
-        for page in pdf.pages:
+        for page_no, page in enumerate(pdf.pages):
             text = page.extract_text() or ""
+            logger.info("[PDF] Page %d — %d caractères extraits", page_no + 1, len(text))
             cur_jour: int | None = None
 
             for line in text.split("\n"):
                 line_global += 1
-                # Normaliser : retirer les caractères non-ASCII pour la comparaison
-                # des noms de jours (ex : "LUNDI" sans BOM ni espace insécable)
                 clean = re.sub(r"[^\x00-\x7F]", "", line).strip()
+                logger.debug("[PDF] ligne %d : %r  →  clean=%r", line_global, line, clean)
 
                 # Détecter le nom du jour (insensible à la casse)
                 if clean.lower() in _JOURS_MAP:
                     cur_jour = _JOURS_MAP[clean.lower()]
+                    logger.info("[PDF] Jour détecté : %r → index %d", clean, cur_jour)
                     continue
 
                 if cur_jour is None:
@@ -257,8 +258,11 @@ def _parse_pdf(content: bytes) -> tuple[list[dict], list[dict]]:
                         "heure_fin":   fin,
                         "matiere":     matiere,
                     })
+                    logger.info("[PDF] Créneau : jour=%d %s-%s %s", cur_jour, debut, fin, matiere)
                 except Exception as exc:
                     errors.append({"row": line_global, "error": str(exc)})
+
+    logger.info("[PDF] Résultat : %d créneau(x), %d erreur(s)", len(segments), len(errors))
 
     if not segments and not errors:
         raise HTTPException(

@@ -23,6 +23,7 @@ err()     { echo -e "${RED}❌ $*${NC}"; exit 1; }
 XLSX="${1:-}"
 [ -n "$XLSX" ] || err "Usage : ./scripts/import_vps.sh /chemin/vers/fichier.xlsx"
 [ -f "$XLSX"  ] || err "Fichier introuvable : $XLSX"
+XLSX="$(cd "$(dirname "$XLSX")" && pwd)/$(basename "$XLSX")"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(dirname "$SCRIPT_DIR")"
