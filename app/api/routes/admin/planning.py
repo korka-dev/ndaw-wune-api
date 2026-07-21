@@ -44,10 +44,14 @@ async def _invalidate_sync_caches() -> None:
             300,
         )
 
-# ── Correspondance nom de jour → indice (0 = Lundi) ───────────────────────────
+# ── Correspondance nom de jour → indice (0 = Jour 1) ─────────────────────────
+# Accepte les noms français classiques ET le format séquentiel "Jour 1/2/..."
 _JOURS_MAP = {
     "lundi": 0, "mardi": 1, "mercredi": 2,
     "jeudi": 3, "vendredi": 4, "samedi": 5, "dimanche": 6,
+    # Format séquentiel (Jour 1 → 0, Jour 2 → 1, ...)
+    **{f"jour {i}": i - 1 for i in range(1, 8)},
+    **{f"j{i}": i - 1 for i in range(1, 8)},
 }
 
 def _parse_jour(raw: str) -> int:
