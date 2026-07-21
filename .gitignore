@@ -1,6 +1,8 @@
 # Environnement — ne JAMAIS commiter
 .env
 
+.env.dev
+
 # Python
 __pycache__/
 *.py[cod]
