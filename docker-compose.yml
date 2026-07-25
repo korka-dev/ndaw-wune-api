@@ -14,7 +14,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Lié à 127.0.0.1 uniquement — Postgres ne doit jamais être exposé sur Internet.
+      # Accessible depuis l'hôte via `psql -h 127.0.0.1`, et depuis les autres
+      # conteneurs via le réseau interne Docker (nom de service "db").
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -36,7 +39,8 @@ services:
         fi
       "
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      # Lié à 127.0.0.1 uniquement — même raisonnement que pour Postgres.
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
@@ -56,15 +60,15 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB}
       REDIS_URL:    redis://redis:${REDIS_PORT:-6379}/${REDIS_DB:-0}
     ports:
-      - "8000:8000"
+      # Lié à 127.0.0.1 uniquement — le trafic public passe par Caddy/Nginx
+      # en reverse proxy sur le VPS (port 80/443), pas directement sur 8000.
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # En développement uniquement — retirer en production
     volumes:
-      - .:/app
       # Volume persistant pour les fichiers uploadés (ressources pédagogiques)
       - uploads_data:/app/uploads
 

@@ -1,0 +1,51 @@
+# ==============================================================================
+#  NDAW WUNE — Config Caddy pour l'API Backend (FastAPI)
+#
+#  Le conteneur Docker sert FastAPI sur 127.0.0.1:8000 (voir docker-compose.yml,
+#  le port n'est plus publié que sur localhost, pas sur 0.0.0.0).
+#  Caddy fait le SSL (automatique via Let's Encrypt) et le reverse proxy.
+#
+#  Le VPS a déjà Caddy installé et actif (utilisé pour admin.ndawwune.cloud).
+#  Ce fichier n'est PAS chargé automatiquement : il faut l'importer ou fusionner
+#  son contenu dans le Caddyfile principal du VPS.
+#
+#  Sur le VPS :
+#    1. Localiser le Caddyfile principal :
+#         sudo find / -name "Caddyfile*" 2>/dev/null
+#    2. Soit copier ce bloc directement dedans, soit l'importer :
+#         import /chemin/vers/ndaw-wune/backend/Caddyfile.api
+#    3. Vérifier la config puis recharger :
+#         sudo caddy validate --config /chemin/vers/Caddyfile
+#         sudo caddy reload --config /chemin/vers/Caddyfile
+#
+#  Pense à créer l'enregistrement DNS (A/AAAA) pour api.ndawwune.cloud
+#  pointant vers l'IP de ce VPS avant de recharger — sinon l'émission du
+#  certificat Let's Encrypt échouera.
+# ==============================================================================
+
+api.ndawwune.cloud {
+    # Taille max pour les imports (CSV, XLSX) et l'upload de ressources pédagogiques
+    request_body {
+        max_size 50MB
+    }
+
+    reverse_proxy 127.0.0.1:8000 {
+        header_up Host              {host}
+        header_up X-Real-IP         {remote_host}
+        header_up X-Forwarded-For   {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        transport http {
+            read_timeout  60s
+            write_timeout 60s
+        }
+    }
+
+    encode gzip
+
+    header {
+        X-Frame-Options        "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy        "strict-origin-when-cross-origin"
+    }
+}
