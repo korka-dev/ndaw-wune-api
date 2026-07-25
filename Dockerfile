@@ -38,7 +38,7 @@ CMD ["sh", "-c", \
      python scripts/create_admin.py && \
      gunicorn app.main:app \
        --worker-class uvicorn.workers.UvicornWorker \
-       --workers 4 \
+       --workers ${GUNICORN_WORKERS:-5} \
        --bind 0.0.0.0:8000 \
        --timeout 120 \
        --access-logfile - \
