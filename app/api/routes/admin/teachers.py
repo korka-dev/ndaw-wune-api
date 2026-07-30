@@ -43,12 +43,13 @@ async def export_teachers_csv(db: DB, _: AdminUser) -> StreamingResponse:
     )).scalars().all()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["nom", "telephone", "titre", "email", "niveau", "classes"])
+    writer.writerow(["nom", "telephone", "titre", "email", "niveau", "classes", "groupe_recherche"])
     for t in items:
         writer.writerow([
             t.name, t.phone or "", t.title or "", t.email or "",
             "|".join(t.niveau or []),
             "|".join(t.classes or []),
+            t.groupe_recherche.value if t.groupe_recherche else "",
         ])
     output.seek(0)
     return StreamingResponse(
@@ -74,6 +75,7 @@ async def export_teachers_xlsx(db: DB, _: AdminUser, fields: Optional[str] = Non
         ("niveaux", "Niveaux",           20),
         ("classes", "Classes",           20),
         ("statut",  "Statut",            12),
+        ("groupe",  "Groupe (étude)",    18),
     ]
     rows = [
         [
@@ -84,6 +86,7 @@ async def export_teachers_xlsx(db: DB, _: AdminUser, fields: Optional[str] = Non
             ", ".join(t.niveau or []),
             ", ".join(t.classes or []),
             t.status,
+            t.groupe_recherche.value if t.groupe_recherche else "",
         ]
         for t in items
     ]

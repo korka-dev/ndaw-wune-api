@@ -6,10 +6,12 @@ from app.api.routes.admin import (
     superviseurs, evaluateurs, eleves,
     suivi_seances, suivi_superviseurs, suivi_plannings, suivi_evaluations,
     rapports_journalier as admin_rapports_journalier,
-    ressources, classes, rapport_questions, evaluation_competences,
+    ressources, classes, rapport_questions, rapport_difficultes, evaluation_competences,
     audit_logs, dashboard_stats, evaluation_sujets, evaluation_docs,
     usage_logs as admin_usage_logs,
     remarques as admin_remarques,
+    rapport_difficulte_resolutions, progression_configs,
+    eleve_remplacements as admin_eleve_remplacements,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -19,11 +21,13 @@ from app.api.routes.app import (
     supervisor_evaluation_sujets,
     supervisor_presences,
     supervisor_difficultes,
+    supervisor_progression,
     teacher_evaluations,
     ressources as app_ressources,
     evaluation_docs as app_evaluation_docs,
     usage as app_usage,
     remarques as app_remarques,
+    remplacements as app_remplacements,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -49,6 +53,7 @@ api_router.include_router(suivi_evaluations.router,        prefix="/admin")
 api_router.include_router(suivi_plannings.router,          prefix="/admin")
 api_router.include_router(ressources.router,               prefix="/admin")
 api_router.include_router(rapport_questions.router,         prefix="/admin")
+api_router.include_router(rapport_difficultes.router,        prefix="/admin")
 api_router.include_router(evaluation_competences.router,    prefix="/admin")
 api_router.include_router(audit_logs.router,                prefix="/admin")
 api_router.include_router(dashboard_stats.router,           prefix="/admin")  # GET /admin/dashboard/stats
@@ -56,6 +61,9 @@ api_router.include_router(evaluation_sujets.router,         prefix="/admin")
 api_router.include_router(evaluation_docs.router,           prefix="/admin")
 api_router.include_router(admin_usage_logs.router,           prefix="/admin")  # GET /admin/usage-logs
 api_router.include_router(admin_remarques.router,            prefix="/admin")  # GET /admin/remarques
+api_router.include_router(rapport_difficulte_resolutions.router, prefix="/admin")  # PATCH /admin/rapport-difficulte-resolutions/{id}/resolve
+api_router.include_router(progression_configs.router,        prefix="/admin")  # /admin/progression-configs
+api_router.include_router(admin_eleve_remplacements.router,  prefix="/admin")  # GET /admin/remplacements
 
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")
@@ -67,8 +75,10 @@ api_router.include_router(supervisor_evaluations.router,   prefix="/app")  # /ap
 api_router.include_router(supervisor_evaluation_sujets.router, prefix="/app")  # /app/supervisor/evaluation-sujets
 api_router.include_router(supervisor_presences.router,     prefix="/app")  # /app/supervisor/presences
 api_router.include_router(supervisor_difficultes.router,   prefix="/app")  # /app/supervisor/difficultes
+api_router.include_router(supervisor_progression.router,   prefix="/app")  # /app/supervisor/progression
 api_router.include_router(teacher_evaluations.router,      prefix="/app")  # /app/teacher/evaluations
 api_router.include_router(app_ressources.router,           prefix="/app")
 api_router.include_router(app_evaluation_docs.router,      prefix="/app")  # /app/supervisor/evaluation-docs
 api_router.include_router(app_usage.router,                 prefix="/app")  # POST /app/usage
 api_router.include_router(app_remarques.router,             prefix="/app")  # /app/remarques
+api_router.include_router(app_remplacements.router,         prefix="/app")  # POST /app/remplacements

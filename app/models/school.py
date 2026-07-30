@@ -17,6 +17,7 @@ class School(Base, UUIDMixin, TimestampMixin):
     city:            Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     director:        Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     director_phone:  Mapped[Optional[str]] = mapped_column(String(30),  nullable=True)
+    langue:          Mapped[Optional[str]] = mapped_column(String(50),  nullable=True)  # langue nationale d'enseignement (ex: pulaar)
 
     # ── Relations ─────────────────────────────────────────────────
     teachers: Mapped[List["User"]] = relationship("User", back_populates="school")

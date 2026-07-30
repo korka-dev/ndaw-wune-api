@@ -9,6 +9,7 @@ class SchoolCreate(BaseModel):
     city:           Optional[str] = None
     director:       Optional[str] = None
     director_phone: Optional[str] = None
+    langue:         Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -24,6 +25,7 @@ class SchoolUpdate(BaseModel):
     city:           Optional[str] = None
     director:       Optional[str] = None
     director_phone: Optional[str] = None
+    langue:         Optional[str] = None
 
 
 class SchoolResponse(BaseModel):
@@ -33,6 +35,7 @@ class SchoolResponse(BaseModel):
     city:           Optional[str]
     director:       Optional[str]
     director_phone: Optional[str] = None
+    langue:         Optional[str] = None
 
     model_config = {"from_attributes": True}
 

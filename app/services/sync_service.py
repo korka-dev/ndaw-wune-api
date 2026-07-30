@@ -11,15 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.eleve import Eleve
 from app.models.planning import PlanningSegment
+from app.models.rapport_difficulte import RapportDifficulte
 from app.models.rapport_question import RapportQuestion
 from app.models.school import School
 from app.models.session import ProgramSession, SessionStatus, TeacherSession
 from app.models.user import User
+from app.services.progression_service import get_config_for
 from app.schemas.sync import (
     SyncEleve,
     SyncPayload,
     SyncPlanningSegment,
     SyncProfile,
+    SyncRapportDifficulte,
     SyncRapportQuestion,
     SyncSchool,
     SyncSession,
@@ -127,6 +130,21 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
     ).scalars().all()
     rapport_questions_items = [SyncRapportQuestion.model_validate(q) for q in questions_rows]
 
+    # ── Liste des difficultés (configurée par l'admin) ───────────────────────
+    difficultes_rows = (
+        await db.execute(
+            select(RapportDifficulte)
+            .where(RapportDifficulte.active.is_(True))
+            .order_by(RapportDifficulte.ordre, RapportDifficulte.created_at)
+        )
+    ).scalars().all()
+    rapport_difficultes_items = [SyncRapportDifficulte.model_validate(d) for d in difficultes_rows]
+
+    # ── Nombre de semaines/jours du programme (configurable école/session) ──
+    nb_semaines, nb_jours = await get_config_for(
+        db, user.school_id, active.id if active else None
+    )
+
     return SyncPayload(
         synced_at=datetime.now(timezone.utc),
         profile=profile,
@@ -135,4 +153,7 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         planning=planning_items,
         eleves=eleves_items,
         rapport_questions=rapport_questions_items,
+        rapport_difficultes=rapport_difficultes_items,
+        nb_semaines=nb_semaines,
+        nb_jours=nb_jours,
     )

@@ -25,6 +25,7 @@ class SyncSchool(BaseModel):
     region:   Optional[str]
     city:     Optional[str]
     director: Optional[str]
+    langue:   Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -80,6 +81,14 @@ class SyncRapportQuestion(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SyncRapportDifficulte(BaseModel):
+    id:    uuid.UUID
+    label: str
+    ordre: int
+
+    model_config = {"from_attributes": True}
+
+
 class SyncPayload(BaseModel):
     """Payload complet téléchargé par l'app mobile pour fonctionner hors-ligne."""
     synced_at:        datetime
@@ -88,4 +97,7 @@ class SyncPayload(BaseModel):
     active_session:   Optional[SyncSession]
     planning:         List[SyncPlanningSegment]
     eleves:           List[SyncEleve] = []
-    rapport_questions: List[SyncRapportQuestion] = []
+    rapport_questions:  List[SyncRapportQuestion]  = []
+    rapport_difficultes: List[SyncRapportDifficulte] = []
+    nb_semaines: int = 10
+    nb_jours:    int = 3

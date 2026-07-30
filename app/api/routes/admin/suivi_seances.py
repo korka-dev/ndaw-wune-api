@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.core.deps import AdminUser, DB
 from app.models.seance import Seance, SeanceStatus, RapportProf
 from app.models.user import User, UserRole
+from app.services.progression_service import get_latest_progression_by_teacher
 
 router = APIRouter(prefix="/suivi-seances", tags=["Admin — Suivi Séances"])
 
@@ -92,6 +93,8 @@ class SuiviSeanceItem(BaseModel):
     seances_planifiees: int                = 0
     seances_ad_hoc:     int                = 0
     score_engagement:   int                = 0
+    progression_semaine: Optional[int]     = None
+    progression_jour:    Optional[int]     = None
 
     model_config = {"from_attributes": True}
 
@@ -187,6 +190,8 @@ async def list_suivi_seances(
     cutoff_7j  = now - timedelta(days=7)
     cutoff_30j = now - timedelta(days=30)
 
+    progress_map = await get_latest_progression_by_teacher(db, teacher_ids)
+
     # ── 5. Construire les items ───────────────────────────────────────────────
     result: list[SuiviSeanceItem] = []
     for row in rows_users:
@@ -275,6 +280,8 @@ async def list_suivi_seances(
             seances_planifiees=planifiees,
             seances_ad_hoc=ad_hoc,
             score_engagement=score,
+            progression_semaine=progress_map.get(user.id, {}).get("semaine"),
+            progression_jour=progress_map.get(user.id, {}).get("jour_cours"),
         ))
 
     return result

@@ -24,6 +24,12 @@ class UserStatus(str, enum.Enum):
     inactif = "inactif"
 
 
+class UserGroupe(str, enum.Enum):
+    """Groupe de l'étude (RCT) affecté à un enseignant — non pertinent hors role=enseignant."""
+    traitement = "traitement"  # app avec minuteur
+    controle   = "controle"    # app sans minuteur
+
+
 class User(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "users"
 
@@ -54,6 +60,11 @@ class User(Base, UUIDMixin, TimestampMixin):
     # ── Premier connexion ─────────────────────────────────────────────────────
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
+    )
+
+    # ── Groupe de recherche (RCT) — Traitement (minuteur) / Contrôle (sans) ───
+    groupe_recherche: Mapped[Optional[UserGroupe]] = mapped_column(
+        Enum(UserGroupe, name="user_groupe"), nullable=True
     )
 
     # ── Rattachement école ────────────────────────────────────────────────────

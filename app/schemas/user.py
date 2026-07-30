@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from app.models.user import UserRole, UserStatus
+from app.models.user import UserGroupe, UserRole, UserStatus
 
 
 def _normalize_sn_phone(v: Optional[str]) -> Optional[str]:
@@ -41,6 +41,8 @@ class UserCreate(BaseModel):
     classes:   Optional[List[str]] = None
     # Accès app mobile : "full" (toutes fonctionnalités) ou "timer_only" (Timer uniquement)
     app_access: Optional[str]      = None
+    # Groupe de l'étude RCT (enseignants uniquement) : "traitement" (minuteur) ou "controle" (sans)
+    groupe_recherche: Optional[UserGroupe] = None
 
     @field_validator("name")
     @classmethod
@@ -74,6 +76,7 @@ class UserUpdate(BaseModel):
     niveau:    Optional[List[str]]  = None
     classes:   Optional[List[str]]  = None
     app_access: Optional[str]       = None
+    groupe_recherche: Optional[UserGroupe] = None
 
     @field_validator("phone")
     @classmethod
@@ -103,6 +106,7 @@ class UserResponse(BaseModel):
     niveau:              Optional[List[str]]
     classes:             Optional[List[str]]
     app_access:          str = "full"
+    groupe_recherche:    Optional[UserGroupe] = None
     must_change_password: bool
     school:              Optional[SchoolBrief] = None
 

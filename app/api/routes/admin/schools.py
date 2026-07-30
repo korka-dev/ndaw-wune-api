@@ -56,9 +56,9 @@ async def export_schools_csv(db: DB, _: AdminUser) -> StreamingResponse:
     items = (await db.execute(select(School).order_by(School.name))).scalars().all()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["nom", "region", "commune", "directeur", "telephone_directeur"])
+    writer.writerow(["nom", "region", "commune", "directeur", "telephone_directeur", "langue"])
     for s in items:
-        writer.writerow([s.name, s.region or "", s.city or "", s.director or "", s.director_phone or ""])
+        writer.writerow([s.name, s.region or "", s.city or "", s.director or "", s.director_phone or "", s.langue or ""])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
@@ -79,6 +79,7 @@ async def export_schools_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None
         ("commune",   "Commune / Ville",  20),
         ("directeur", "Directeur(trice)", 25),
         ("telephone", "Téléphone",        18),
+        ("langue",    "Langue",           15),
     ]
     rows = [
         [
@@ -87,6 +88,7 @@ async def export_schools_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None
             s.city or "",
             s.director or "",
             s.director_phone or "",
+            s.langue or "",
         ]
         for s in items
     ]
@@ -121,6 +123,7 @@ async def import_schools_csv(db: DB, _: AdminUser, file: UploadFile = File(...))
             city=(row.get("commune") or row.get("city") or "").strip() or None,
             director=(row.get("directeur") or row.get("director") or "").strip() or None,
             director_phone=(row.get("telephone_directeur") or row.get("director_phone") or "").strip() or None,
+            langue=(row.get("langue") or row.get("language") or "").strip() or None,
         )
         db.add(school)
         imported += 1
@@ -161,6 +164,7 @@ async def reimport_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
         "commune":   ["commune / ville", "commune/ville", "commune", "ville", "city"],
         "directeur": ["directeur(trice)", "directeur", "director"],
         "phone":     ["téléphone", "telephone", "phone", "tel"],
+        "langue":    ["langue", "language"],
     }
     col_idx: dict[str, int] = {}
     for field, aliases in HEADER_ALIASES.items():
@@ -209,6 +213,7 @@ async def reimport_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
         commune   = col(row, "commune")   or None
         directeur = col(row, "directeur") or None
         phone     = col(row, "phone")     or None
+        langue    = col(row, "langue")    or None
 
         key = nom.strip().upper()
         existing = school_by_name.get(key)
@@ -229,6 +234,8 @@ async def reimport_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
                 existing.city = commune; changed = True
             if directeur is not None and existing.director != directeur:
                 existing.director = directeur; changed = True
+            if langue is not None and existing.langue != langue:
+                existing.langue = langue; changed = True
             if phone and existing.director_phone != phone:
                 if existing.director_phone:
                     phone_to_id.pop(existing.director_phone, None)
@@ -246,6 +253,7 @@ async def reimport_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
                 city=commune,
                 director=directeur,
                 director_phone=phone,
+                langue=langue,
             )
             db.add(school)
             await db.flush()
