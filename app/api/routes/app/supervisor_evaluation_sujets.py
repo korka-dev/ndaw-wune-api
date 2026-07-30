@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.deps import DB, SuperviseurUser
+from app.core.upload_utils import ALLOWED_AUDIO_EXTENSIONS, check_extension_allowed, read_upload_capped
 from app.models.eleve import Eleve
 from app.models.evaluation_sujet import EvaluationSujet
 from app.models.evaluation_tirage import EvaluationTirage
@@ -71,6 +72,43 @@ async def _get_supervisor_teacher_ids(supervisor: User) -> list[uuid.UUID]:
     return ids
 
 
+async def _get_supervisor_school_classe_pairs(db, supervisor: User) -> list[tuple[uuid.UUID, str]]:
+    """Retourne les paires (école, classe) couvertes par les enseignants assignés à ce superviseur."""
+    teacher_ids = await _get_supervisor_teacher_ids(supervisor)
+    if not teacher_ids:
+        return []
+    teachers = (await db.execute(
+        select(User).where(User.id.in_(teacher_ids))
+    )).scalars().all()
+    pairs: list[tuple[uuid.UUID, str]] = []
+    for t in teachers:
+        if t.school_id and t.classes:
+            for cls in t.classes:
+                pairs.append((t.school_id, cls))
+    return pairs
+
+
+async def _get_owned_tirage(db, tirage_id: uuid.UUID, current_user: User) -> EvaluationTirage:
+    """
+    Charge le tirage et vérifie qu'il appartient à un élève d'une classe
+    supervisée par cet utilisateur — sinon 404 (pas 403, pour ne pas
+    confirmer l'existence du tirage à quelqu'un qui n'y a pas droit).
+    """
+    tirage = (await db.execute(
+        select(EvaluationTirage)
+        .options(selectinload(EvaluationTirage.eleve))
+        .where(EvaluationTirage.id == tirage_id)
+    )).scalar_one_or_none()
+    if tirage is None or tirage.eleve is None:
+        raise HTTPException(status_code=404, detail="Tirage introuvable.")
+
+    allowed_pairs = await _get_supervisor_school_classe_pairs(db, current_user)
+    e = tirage.eleve
+    if not any(e.school_id == sid and e.classe == cls for sid, cls in allowed_pairs):
+        raise HTTPException(status_code=404, detail="Tirage introuvable.")
+    return tirage
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/evaluation-sujets", response_model=list[SujetAppOut])
@@ -82,22 +120,7 @@ async def list_evaluation_sujets(
     Retourne les sujets d'évaluation avec les élèves tirés au sort
     qui appartiennent aux classes supervisées par ce superviseur.
     """
-    teacher_ids = await _get_supervisor_teacher_ids(current_user)
-    if not teacher_ids:
-        return []
-
-    # Récupère les enseignants avec leurs classes
-    teachers = (await db.execute(
-        select(User).where(User.id.in_(teacher_ids))
-    )).scalars().all()
-
-    # Construit le mapping (school_id, classe) → teacher
-    school_classe_pairs: list[tuple[uuid.UUID, str]] = []
-    for t in teachers:
-        if t.school_id and t.classes:
-            for cls in t.classes:
-                school_classe_pairs.append((t.school_id, cls))
-
+    school_classe_pairs = await _get_supervisor_school_classe_pairs(db, current_user)
     if not school_classe_pairs:
         return []
 
@@ -176,6 +199,8 @@ async def set_tirages_presence(
     if not body.entries:
         raise HTTPException(status_code=422, detail="La liste de présences est vide.")
 
+    allowed_pairs = await _get_supervisor_school_classe_pairs(db, current_user)
+
     updated = 0
     for entry in body.entries:
         try:
@@ -184,9 +209,19 @@ async def set_tirages_presence(
             raise HTTPException(status_code=422, detail=f"tirage_id invalide : {entry.tirage_id}")
 
         tirage = (await db.execute(
-            select(EvaluationTirage).where(EvaluationTirage.id == tid)
+            select(EvaluationTirage)
+            .options(selectinload(EvaluationTirage.eleve))
+            .where(EvaluationTirage.id == tid)
         )).scalar_one_or_none()
-        if tirage is None:
+        if tirage is None or tirage.eleve is None:
+            continue
+
+        # Ignore silencieusement les tirages hors du périmètre de ce
+        # superviseur (élève d'une classe non supervisée) — évite qu'un
+        # tirage_id deviné/observé ailleurs permette d'écrire des données
+        # sur un élève dont on n'a pas la charge.
+        e = tirage.eleve
+        if not any(e.school_id == sid and e.classe == cls for sid, cls in allowed_pairs):
             continue
 
         tirage.present = entry.present
@@ -210,13 +245,7 @@ async def submit_tirage(
     """
     Soumet le résultat d'évaluation pour un tirage, avec enregistrement audio optionnel.
     """
-    tirage = (await db.execute(
-        select(EvaluationTirage)
-        .options(selectinload(EvaluationTirage.eleve))
-        .where(EvaluationTirage.id == tirage_id)
-    )).scalar_one_or_none()
-    if tirage is None:
-        raise HTTPException(status_code=404, detail="Tirage introuvable.")
+    tirage = await _get_owned_tirage(db, tirage_id, current_user)
 
     if resultat not in ("reussi", "intermediaire", "pas_reussi", "acquis", "a_aider"):
         raise HTTPException(
@@ -226,7 +255,8 @@ async def submit_tirage(
 
     # Sauvegarde de l'audio
     if audio and audio.filename:
-        content = await audio.read()
+        check_extension_allowed(audio.filename, ALLOWED_AUDIO_EXTENSIONS)
+        content = await read_upload_capped(audio)
         suffix = Path(audio.filename).suffix or ".m4a"
         audio_filename = f"eval_audio_{tirage_id}{suffix}"
         uploads_dir = Path(settings.UPLOADS_DIR)

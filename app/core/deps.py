@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -43,6 +44,13 @@ async def get_current_user(
 
     if user is None:
         raise credentials_exception
+
+    # Tokens émis avant un changement/reset de mot de passe sont rejetés,
+    # même si non encore expirés (voir User.tokens_valid_from).
+    if user.tokens_valid_from is not None:
+        iat = payload.get("iat")
+        if iat is None or datetime.fromtimestamp(iat, tz=timezone.utc) < user.tokens_valid_from:
+            raise credentials_exception
 
     # Comparer des Enum entre eux, jamais à une string brute
     if user.status == UserStatus.inactif:

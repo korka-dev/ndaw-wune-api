@@ -5,6 +5,7 @@ Toute la logique métier est ici ; les routes délèguent sans connaître les d�
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from fastapi import HTTPException, status
@@ -202,6 +203,13 @@ async def change_password(
 
     user.password_hash        = hash_password(new_password)
     user.must_change_password = False
+    # Invalide tous les tokens (access + refresh) déjà émis, sur tous les
+    # appareils — un token volé avant ce changement ne survit plus à la
+    # remédiation (voir app/core/deps.py get_current_user et /auth/refresh).
+    # Tronqué à la seconde : le claim JWT "iat" est un NumericDate en
+    # secondes (sans microsecondes) — comparer à une valeur plus précise
+    # rejetterait à tort un token émis dans la même seconde.
+    user.tokens_valid_from     = datetime.now(timezone.utc).replace(microsecond=0)
     await db.flush()
 
 

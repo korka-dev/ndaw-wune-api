@@ -72,6 +72,28 @@ def create_token_pair(user_id: str, role: str) -> dict:
     }
 
 
+DOWNLOAD_TOKEN_EXPIRE_SECONDS = 120
+
+
+def create_download_token(subject: str, resource_id: str) -> str:
+    """
+    Jeton de très courte durée (2 min), scopé à une seule ressource.
+    Utilisé uniquement pour ouvrir un fichier dans une app externe
+    (Linking.openURL côté mobile), où un header Authorization n'est pas
+    possible — évite d'exposer le token d'accès complet (60 min, tout compte)
+    dans une URL transmise à une app tierce.
+    """
+    expire = datetime.now(timezone.utc) + timedelta(seconds=DOWNLOAD_TOKEN_EXPIRE_SECONDS)
+    payload = {
+        "sub": subject,
+        "type": "download",
+        "resource_id": resource_id,
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
 # ── Blacklist Redis (révocation de tokens) ───────────────────────────────────
 
 async def revoke_token(token: str) -> None:

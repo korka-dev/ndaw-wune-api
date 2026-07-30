@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.deps import DB, AdminUser
+from app.core.upload_utils import read_upload_capped
 from app.models.evaluation_doc import EvaluationDoc
 
 PANDOC_PATH = "/usr/local/bin/pandoc"
@@ -128,7 +129,7 @@ async def upload_doc(file: UploadFile, _: AdminUser, db: DB) -> EvaluationDocOut
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Seuls les fichiers .docx sont acceptés.")
 
-    content = await file.read()
+    content = await read_upload_capped(file)
 
     # Écrire dans un fichier temporaire et parser avec pandoc
     with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:

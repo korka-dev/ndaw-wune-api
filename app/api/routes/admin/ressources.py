@@ -12,6 +12,7 @@ from sqlalchemy import select, delete
 
 from app.core.config import settings
 from app.core.deps import AdminUser, DB
+from app.core.upload_utils import ALLOWED_RESOURCE_EXTENSIONS, check_extension_allowed, read_upload_capped
 from app.models.document import Document
 from app.schemas.document import DocumentResponse
 
@@ -46,11 +47,12 @@ async def upload_document(
     description: str | None = Form(default=None),
     resource_type: str | None = Form(default=None),
 ) -> DocumentResponse:
-    content = await file.read()
-    file_size = len(content)
-
     # Nom original nettoyé (garde uniquement le nom de base, sans chemin)
     original_filename = Path(file.filename or "fichier").name
+    check_extension_allowed(original_filename, ALLOWED_RESOURCE_EXTENSIONS)
+
+    content = await read_upload_capped(file)
+    file_size = len(content)
 
     # Type MIME : d'abord celui envoyé par le navigateur, sinon on le détecte
     mime_type = file.content_type or ""

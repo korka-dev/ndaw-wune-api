@@ -52,6 +52,12 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class LogoutRequest(BaseModel):
+    # Optionnel pour rester compatible avec un client qui n'enverrait pas
+    # encore ce champ — mais nécessaire pour révoquer aussi le refresh token.
+    refresh_token: Optional[str] = None
+
+
 class MeResponse(BaseModel):
     id:                  str
     name:                str

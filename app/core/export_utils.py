@@ -26,6 +26,24 @@ def parse_fields(fields: Optional[str], all_keys: Sequence[str]) -> list[str]:
     return selected or list(all_keys)
 
 
+# Caractères qu'Excel/LibreOffice/Google Sheets interprètent comme un début
+# de formule quand ils ouvrent un fichier CSV/XLSX (CSV Injection — OWASP).
+_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def sanitize_cell(value):
+    """
+    Neutralise l'injection de formule : préfixe d'une apostrophe toute valeur
+    texte commençant par un caractère déclencheur de formule. Les données
+    exportées ici (noms d'écoles, d'enseignants, d'élèves, remarques…) sont
+    en grande partie saisies par des tuteurs/superviseurs depuis l'app
+    mobile, donc non fiables par défaut.
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_TRIGGER_CHARS):
+        return "'" + value
+    return value
+
+
 def build_xlsx_response(
     *,
     sheet_title: str,
@@ -58,7 +76,7 @@ def build_xlsx_response(
         cell.alignment = Alignment(horizontal="center")
 
     for row in rows:
-        ws.append([row[i] for i in indices])
+        ws.append([sanitize_cell(row[i]) for i in indices])
 
     for col_idx, i in enumerate(indices, start=1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = columns[i][2]
@@ -93,7 +111,7 @@ def build_csv_response(
     writer = csv.writer(output)
     writer.writerow([columns[i][1] for i in indices])
     for row in rows:
-        writer.writerow([row[i] for i in indices])
+        writer.writerow([sanitize_cell(row[i]) for i in indices])
 
     output.seek(0)
     return StreamingResponse(

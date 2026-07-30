@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
-from app.core.export_utils import build_xlsx_response
+from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.school import School
 from app.schemas.school import SchoolCreate, SchoolUpdate, SchoolResponse
@@ -58,7 +58,9 @@ async def export_schools_csv(db: DB, _: AdminUser) -> StreamingResponse:
     writer = csv.writer(output)
     writer.writerow(["nom", "region", "commune", "directeur", "telephone_directeur", "langue"])
     for s in items:
-        writer.writerow([s.name, s.region or "", s.city or "", s.director or "", s.director_phone or "", s.langue or ""])
+        writer.writerow([sanitize_cell(v) for v in (
+            s.name, s.region or "", s.city or "", s.director or "", s.director_phone or "", s.langue or ""
+        )])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),

@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import or_
 
 from app.core.deps import AdminUser, DB
-from app.core.export_utils import build_xlsx_response
+from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.user import User, UserRole
 from app.models.school import School
@@ -80,14 +80,14 @@ async def export_superviseurs_csv(db: DB, _: AdminUser) -> StreamingResponse:
     writer = csv.writer(output)
     writer.writerow(["nom", "telephone", "ecole", "code_ecole", "nb_enseignants", "statut"])
     for s in items:
-        writer.writerow([
+        writer.writerow([sanitize_cell(v) for v in (
             s.name,
             s.phone or "",
             s.school.name if s.school else "",
             s.school.code_ecole if s.school and s.school.code_ecole is not None else "",
             len(s.classes or []),
             s.status,
-        ])
+        )])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),

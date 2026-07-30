@@ -1,5 +1,6 @@
 import re
 
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Body
@@ -20,6 +21,7 @@ from app.models.user import User, UserStatus
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
+    LogoutRequest,
     MeResponse,
     RefreshRequest,
     ResetPasswordRequest,
@@ -111,6 +113,14 @@ async def refresh(body: RefreshRequest = Body(...), db: AsyncSession = Depends(g
     if user is None or user.status == UserStatus.inactif:
         raise invalid
 
+    if user.tokens_valid_from is not None:
+        iat = payload.get("iat")
+        if iat is None or datetime.fromtimestamp(iat, tz=timezone.utc) < user.tokens_valid_from:
+            raise invalid
+
+    if await is_token_revoked(body.refresh_token):
+        raise invalid
+
     tokens = create_token_pair(str(user.id), user.role.value)
     return TokenResponse(**tokens, must_change_password=user.must_change_password)
 
@@ -144,12 +154,17 @@ async def change_password(
 async def logout(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
     current_user: CurrentUser,
+    body: LogoutRequest = Body(default=LogoutRequest()),
 ) -> Response:
     """
-    Déconnexion : révoque le token d'accès courant dans la blacklist Redis.
+    Déconnexion : révoque le token d'accès courant, et le refresh token de cet
+    appareil s'il est fourni — sans lui, un refresh token volé pourrait sinon
+    continuer à fonctionner après un "logout" apparent.
     Le client doit également supprimer ses tokens côté stockage local.
     """
     await revoke_token(credentials.credentials)
+    if body.refresh_token:
+        await revoke_token(body.refresh_token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

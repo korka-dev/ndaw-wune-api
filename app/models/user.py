@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import enum
 import uuid
+from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Boolean, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,6 +61,15 @@ class User(Base, UUIDMixin, TimestampMixin):
     # ── Premier connexion ─────────────────────────────────────────────────────
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
+    )
+
+    # ── Invalidation globale des tokens (tous appareils) ──────────────────────
+    # Tout token (access ou refresh) émis AVANT cette date est rejeté, même
+    # s'il n'est pas encore expiré — mis à jour au changement/reset de mot de
+    # passe pour forcer une reconnexion partout, y compris avec un refresh
+    # token déjà volé. NULL = aucune restriction (comportement historique).
+    tokens_valid_from: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     # ── Groupe de recherche (RCT) — Traitement (minuteur) / Contrôle (sans) ───

@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select
 
 from app.core.deps import AdminUser, DB
-from app.core.export_utils import build_xlsx_response
+from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.core.security import hash_password
 from app.models.school import School
@@ -45,12 +45,12 @@ async def export_teachers_csv(db: DB, _: AdminUser) -> StreamingResponse:
     writer = csv.writer(output)
     writer.writerow(["nom", "telephone", "titre", "email", "niveau", "classes", "groupe_recherche"])
     for t in items:
-        writer.writerow([
+        writer.writerow([sanitize_cell(v) for v in (
             t.name, t.phone or "", t.title or "", t.email or "",
             "|".join(t.niveau or []),
             "|".join(t.classes or []),
             t.groupe_recherche.value if t.groupe_recherche else "",
-        ])
+        )])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),

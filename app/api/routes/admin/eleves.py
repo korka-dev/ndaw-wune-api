@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
-from app.core.export_utils import build_xlsx_response
+from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.eleve import Eleve
 from app.models.school import School
@@ -380,10 +380,10 @@ async def export_eleves_csv(db: DB, _: AdminUser) -> StreamingResponse:
     writer = csv.writer(output)
     writer.writerow(["nom", "prenom", "sexe", "date_naissance", "classe", "statut"])
     for e in items:
-        writer.writerow([
+        writer.writerow([sanitize_cell(v) for v in (
             e.nom, e.prenom or "", e.genre or "", e.date_naissance or "",
             e.classe, e.statut,
-        ])
+        )])
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),

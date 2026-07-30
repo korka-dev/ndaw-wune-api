@@ -149,22 +149,67 @@ async def audit_log_middleware(request: Request, call_next):
 
 # ── Gestionnaires d'erreurs globaux ─────────────────────────────────────────────
 
+_SENSITIVE_BODY_KEYS = {
+    "password", "new_password", "confirm_password", "old_password",
+    "current_password", "secret", "secret_key", "token",
+    "access_token", "refresh_token",
+}
+
+
+def _redact_body_for_log(body_bytes: bytes) -> str:
+    """
+    Retourne une version du corps de requête sûre à logger : les mots de
+    passe et tokens sont remplacés par "***", tout le reste est conservé
+    pour le débogage. Si le corps n'est pas du JSON exploitable (upload de
+    fichier, etc.), on ne logue rien plutôt que de risquer de fuiter des
+    données binaires ou non prévues.
+    """
+    import json
+
+    try:
+        parsed = json.loads(body_bytes.decode("utf-8", errors="replace"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return "<corps non-JSON — non loggé>"
+
+    def redact(value):
+        if isinstance(value, dict):
+            return {
+                k: ("***" if k.lower() in _SENSITIVE_BODY_KEYS else redact(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [redact(v) for v in value]
+        return value
+
+    return json.dumps(redact(parsed), ensure_ascii=False)
+
+
 def _safe_validation_errors(errors: list) -> list:
-    """Rend les erreurs Pydantic v2 JSON-sérialisables.
+    """Rend les erreurs Pydantic v2 JSON-sérialisables (et sûres à logger/renvoyer).
 
     En Pydantic v2, le champ `ctx` peut contenir l'instance d'exception brute
     (ex. ValueError) qui n'est pas sérialisable par json.dumps().
     On convertit toute valeur qui est une Exception en sa repr string.
+
+    Pydantic inclut aussi la valeur brute soumise dans `input` — pour un champ
+    sensible (mot de passe, token…), cette valeur atterrirait en clair à la
+    fois dans les logs ET dans la réponse HTTP 422 renvoyée au client.
     """
     safe = []
     for err in errors:
         safe_err = {}
+        loc = err.get("loc") or ()
+        is_sensitive_field = any(
+            str(part).lower() in _SENSITIVE_BODY_KEYS for part in loc
+        )
         for key, val in err.items():
             if key == "ctx" and isinstance(val, dict):
                 safe_err[key] = {
                     k: str(v) if isinstance(v, Exception) else v
                     for k, v in val.items()
                 }
+            elif key == "input" and is_sensitive_field:
+                safe_err[key] = "***"
             else:
                 safe_err[key] = val
         safe.append(safe_err)
@@ -183,12 +228,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     errors = _safe_validation_errors(exc.errors())
 
     logger.error(
-        "⚠️ Erreur de validation (422) sur %s %s [%s] :\n- Erreurs : %s\n- Body reçu : %s",
+        "⚠️ Erreur de validation (422) sur %s %s [%s] :\n- Erreurs : %s\n- Body reçu (mots de passe/tokens masqués) : %s",
         request.method,
         request.url.path,
         getattr(request.state, "request_id", "—"),
         errors,
-        body_bytes.decode("utf-8", errors="replace"),
+        _redact_body_for_log(body_bytes),
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
