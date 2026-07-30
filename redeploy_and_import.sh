@@ -9,6 +9,8 @@
 #        ./redeploy_and_import.sh --import ~/LISTES_ELEVES.xlsx
 #    • Redéployer + Importer remplacement (écoles + superviseurs + classes + élèves) :
 #        ./redeploy_and_import.sh --import-remplacement ~/ListeDesELevesPricipauxRemplacement.xlsx
+#    • Redéployer + Importer langues des écoles + groupes Traitement/Contrôle :
+#        ./redeploy_and_import.sh --import-langues-groupes ~/Langues.xlsx ~/Assignation_Traitement_Simple_NWV2026.xlsx
 # ==============================================================================
 
 set -euo pipefail
@@ -28,6 +30,8 @@ cd "$BACKEND_DIR"
 
 EXCEL_FILE=""
 REMPLACEMENT_FILE=""
+LANGUES_FILE=""
+ASSIGNATION_FILE=""
 
 # ── Parsing des arguments ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -46,8 +50,16 @@ while [[ $# -gt 0 ]]; do
         shift 1
       fi
       ;;
+    --import-langues-groupes)
+      if [[ -z "${2:-}" || -z "${3:-}" ]]; then
+        error "Usage : --import-langues-groupes <Langues.xlsx> <Assignation.xlsx>"
+      fi
+      LANGUES_FILE="$2"
+      ASSIGNATION_FILE="$3"
+      shift 3
+      ;;
     *)
-      error "Argument inconnu : $1\nUsage : $0 [--import fichier.xlsx] [--import-remplacement fichier.xlsx]"
+      error "Argument inconnu : $1\nUsage : $0 [--import fichier.xlsx] [--import-remplacement fichier.xlsx] [--import-langues-groupes <Langues.xlsx> <Assignation.xlsx>]"
       ;;
   esac
 done
@@ -121,6 +133,35 @@ run_import() {
   success "Import ${LABEL} terminé !"
 }
 
+# Variante à deux fichiers (ex: Langues.xlsx + Assignation.xlsx)
+run_import_2files() {
+  local FILE1="$1"
+  local FILE2="$2"
+  local SCRIPT="$3"
+  local LABEL="$4"
+
+  [[ -f "$FILE1" ]] || error "Fichier introuvable sur le VPS : $FILE1"
+  [[ -f "$FILE2" ]] || error "Fichier introuvable sur le VPS : $FILE2"
+
+  local BASENAME1 BASENAME2
+  BASENAME1=$(basename "$FILE1")
+  BASENAME2=$(basename "$FILE2")
+  local CONTAINER_PATH1="/tmp/${BASENAME1}"
+  local CONTAINER_PATH2="/tmp/${BASENAME2}"
+
+  log "Copie de ${BASENAME1} et ${BASENAME2} dans le conteneur..."
+  docker cp "$FILE1" "${CONTAINER_ID}:${CONTAINER_PATH1}"
+  docker cp "$FILE2" "${CONTAINER_ID}:${CONTAINER_PATH2}"
+
+  log "Lancement de l'import ${LABEL}..."
+  docker compose exec -T backend python3 "$SCRIPT" "$CONTAINER_PATH1" "$CONTAINER_PATH2"
+
+  log "Nettoyage des fichiers temporaires..."
+  docker compose exec -T backend rm -f "$CONTAINER_PATH1" "$CONTAINER_PATH2"
+
+  success "Import ${LABEL} terminé !"
+}
+
 if [[ -n "$EXCEL_FILE" ]]; then
   header "Étape 3 — Import des élèves (import_eleves)"
   log "Vérification des dépendances Python requises..."
@@ -133,12 +174,20 @@ if [[ -n "$REMPLACEMENT_FILE" ]]; then
   run_import "$REMPLACEMENT_FILE" "scripts/import_remplacement.py" "remplacement"
 fi
 
-if [[ -z "$EXCEL_FILE" && -z "$REMPLACEMENT_FILE" ]]; then
+if [[ -n "$LANGUES_FILE" ]]; then
+  header "Étape 3 — Import Langues des écoles + Groupes Traitement/Contrôle"
+  log "Vérification des dépendances Python requises..."
+  docker compose exec -T backend pip install --quiet pandas
+  run_import_2files "$LANGUES_FILE" "$ASSIGNATION_FILE" "scripts/import_langues_et_groupes_2026.py" "langues + groupes"
+fi
+
+if [[ -z "$EXCEL_FILE" && -z "$REMPLACEMENT_FILE" && -z "$LANGUES_FILE" ]]; then
   echo ""
   success "Déploiement terminé — aucun import demandé."
   echo -e "\n💡 ${YELLOW}Options d'import disponibles :${NC}"
   echo -e "   ${CYAN}./redeploy_and_import.sh --import <fichier.xlsx>${NC}                  → import_eleves.py"
   echo -e "   ${CYAN}./redeploy_and_import.sh --import-remplacement <fichier.xlsx>${NC}     → import_remplacement.py"
+  echo -e "   ${CYAN}./redeploy_and_import.sh --import-langues-groupes <Langues.xlsx> <Assignation.xlsx>${NC}  → import_langues_et_groupes_2026.py"
   echo ""
   exit 0
 fi
