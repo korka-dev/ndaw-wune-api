@@ -33,12 +33,15 @@ EXPOSE 8000
 # ── Démarrage ─────────────────────────────────────────────────────────────────
 # 1. Applique les migrations Alembic
 # 2. Lance gunicorn avec uvicorn workers
+#    Nombre de workers par défaut : 9 (2×vCPU+1, calibré pour un VPS 4 vCPU/8 Go —
+#    voir backend/loadtest/README.md pour la méthode de calcul et le lien avec
+#    MAX_CONNECTIONS_POOL/MAX_OVERFLOW et max_connections Postgres).
 CMD ["sh", "-c", \
     "alembic upgrade head && \
      python scripts/create_admin.py && \
      gunicorn app.main:app \
        --worker-class uvicorn.workers.UvicornWorker \
-       --workers ${GUNICORN_WORKERS:-5} \
+       --workers ${GUNICORN_WORKERS:-9} \
        --bind 0.0.0.0:8000 \
        --timeout 120 \
        --access-logfile - \
