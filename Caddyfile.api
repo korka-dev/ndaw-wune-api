@@ -24,6 +24,11 @@
 # ==============================================================================
 
 api.ndawwune.cloud {
+    # /metrics n'est JAMAIS public — Prometheus le scrape en interne via le
+    # réseau Docker (backend:8000), pas via ce domaine public.
+    @metrics path /metrics
+    respond @metrics 404
+
     # Taille max pour les imports (CSV, XLSX) et l'upload de ressources pédagogiques
     request_body {
         max_size 50MB

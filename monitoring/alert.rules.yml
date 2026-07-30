@@ -1,0 +1,75 @@
+groups:
+  - name: ndawwune
+    rules:
+      # ── Disponibilité ──────────────────────────────────────────────────────
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Le backend NDAW WUNE ne répond plus"
+          description: "/metrics n'a pas répondu depuis 1 minute."
+
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "PostgreSQL injoignable"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "Redis injoignable (cache de sync dégradé, pas bloquant)"
+
+      # ── API ────────────────────────────────────────────────────────────────
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="backend", status="5xx"}[5m]))
+          / sum(rate(http_requests_total{job="backend"}[5m])) > 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Taux d'erreurs 5xx > 5% sur l'API"
+
+      - alert: HighRequestLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_highr_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 de latence API > 2s depuis 5 minutes"
+
+      # ── Base de données ───────────────────────────────────────────────────
+      # 220 = max_connections configuré (voir backend/docker-compose.yml) —
+      # alerte avant saturation, quand on approche du plafond applicatif (180).
+      - alert: PostgresConnectionsHigh
+        expr: sum(pg_stat_activity_count) > 190
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Connexions PostgreSQL proches du plafond (max_connections=220)"
+
+      # ── Serveur (node-exporter) ──────────────────────────────────────────────
+      - alert: HostHighCpuLoad
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "CPU serveur > 85% depuis 10 minutes"
+
+      - alert: HostLowMemory
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100 < 10
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "RAM disponible < 10%"
+
+      - alert: HostLowDiskSpace
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} * 100 < 10
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Espace disque disponible < 10% sur /"

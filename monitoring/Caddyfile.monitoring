@@ -1,0 +1,35 @@
+# ==============================================================================
+#  NDAW WUNE — Config Caddy pour Grafana (supervision)
+#
+#  Grafana tourne sur 127.0.0.1:3001 (voir monitoring/docker-compose.yml).
+#  Caddy fait le SSL et le reverse proxy — l'authentification reste celle de
+#  Grafana lui-même (login admin défini dans monitoring/.env).
+#
+#  Prometheus (127.0.0.1:9090) N'EST PAS exposé ici, volontairement — il ne
+#  sert que de datasource interne à Grafana. Pour y accéder directement,
+#  utiliser un tunnel SSH : ssh -L 9090:localhost:9090 user@vps
+#
+#  Sur le VPS :
+#    1. Importer ce fichier dans le Caddyfile principal (voir Caddyfile.api
+#       pour la marche à suivre complète) :
+#         import /chemin/vers/ndaw-wune/backend/monitoring/Caddyfile.monitoring
+#    2. Créer l'enregistrement DNS (A/AAAA) pour monitoring.ndawwune.cloud
+#       avant de recharger Caddy.
+# ==============================================================================
+
+monitoring.ndawwune.cloud {
+    reverse_proxy 127.0.0.1:3001 {
+        header_up Host              {host}
+        header_up X-Real-IP         {remote_host}
+        header_up X-Forwarded-For   {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    encode gzip
+
+    header {
+        X-Frame-Options        "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy        "strict-origin-when-cross-origin"
+    }
+}

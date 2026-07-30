@@ -271,6 +271,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.include_router(api_router)
 
 
+# ── Métriques Prometheus ────────────────────────────────────────────────────────
+# Expose /metrics (latence, taux d'erreur, requêtes/s par endpoint). Jamais
+# public : Caddy bloque explicitement ce chemin (voir Caddyfile.api) — seul
+# Prometheus, sur le réseau Docker interne, y accède directement (backend:8000).
+from prometheus_fastapi_instrumentator import Instrumentator  # noqa: E402
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+
 @app.get("/health", tags=["Health"], include_in_schema=False)
 async def health() -> dict:
     """Endpoint de healthcheck pour Docker et le load balancer."""

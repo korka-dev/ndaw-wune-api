@@ -86,3 +86,11 @@ services:
 volumes:
   postgres_data:
   uploads_data:
+
+# Nom de réseau explicite et stable (indépendant du nom du dossier, qui
+# diffère entre environnements — "backend" en local, "ndaw-wune" sur le VPS)
+# — permet à la stack monitoring/ (fichier compose séparé) de rejoindre ce
+# réseau en tant que réseau externe pour scraper db/redis/backend par nom.
+networks:
+  default:
+    name: ndawwune-net

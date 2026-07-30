@@ -1,0 +1,4 @@
+Placez ici les fichiers .json de dashboards Grafana à provisionner
+automatiquement (ex: export d'un dashboard depuis l'UI Grafana, ou un
+dashboard téléchargé depuis grafana.com/dashboards). Rechargés automatiquement
+toutes les 30s (voir dashboards.yml), pas besoin de redémarrer Grafana.

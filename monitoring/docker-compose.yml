@@ -1,0 +1,95 @@
+# ==============================================================================
+#  NDAW WUNE — Stack de supervision (Prometheus + Grafana + exporters)
+#
+#  Séparée du docker-compose.yml principal : le cycle de vie de la supervision
+#  (redémarrages, mises à jour) n'a pas besoin d'être couplé à celui de l'app.
+#  Rejoint le réseau "ndawwune-net" créé par le docker-compose.yml principal
+#  (backend/docker-compose.yml) pour scraper db/redis/backend par nom de service
+#  — lancez donc TOUJOURS la stack principale en premier.
+#
+#  Usage (depuis backend/monitoring/) :
+#    cp .env.example .env   # une fois : éditer le mot de passe Grafana et
+#                            # recopier POSTGRES_*/REDIS_PASSWORD depuis ../.env
+#    docker compose up -d
+#
+#  Note : le fichier DOIT s'appeler ".env" (pas ".env.monitoring") — Docker
+#  Compose ne charge automatiquement que ce nom précis pour interpoler les
+#  ${VARIABLES} de ce fichier YAML (indépendamment de tout env_file: par service).
+# ==============================================================================
+
+services:
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    pull_policy: missing
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    ports:
+      # Lié à 127.0.0.1 uniquement — jamais public. Accès via tunnel SSH
+      # (ssh -L 9090:localhost:9090 ...) ou uniquement comme datasource Grafana.
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER:     ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+      # Derrière Caddy sur monitoring.ndawwune.cloud (voir Caddyfile.monitoring)
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3001}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      # Lié à 127.0.0.1 — exposé publiquement uniquement via Caddy (HTTPS + auth Grafana).
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    pull_policy: missing
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --path.rootfs=/rootfs
+    # Pas de port publié : scrapé uniquement via le réseau Docker interne.
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable"
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR:     redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    name: ndawwune-net
+    external: true
