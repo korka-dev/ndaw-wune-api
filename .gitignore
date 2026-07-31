@@ -3,6 +3,9 @@
 
 .env.dev
 
+# Supervision — contient un mot de passe SMTP en clair
+monitoring/alertmanager.yml
+
 # Python
 __pycache__/
 *.py[cod]

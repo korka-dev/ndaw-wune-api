@@ -35,6 +35,22 @@ services:
       # Lié à 127.0.0.1 uniquement — jamais public. Accès via tunnel SSH
       # (ssh -L 9090:localhost:9090 ...) ou uniquement comme datasource Grafana.
       - "127.0.0.1:9090:9090"
+    depends_on:
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    pull_policy: missing
+    restart: unless-stopped
+    volumes:
+      # alertmanager.yml n'est PAS versionné (contient le mot de passe SMTP) —
+      # voir alertmanager.yml.example et le README pour le créer.
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      # Lié à 127.0.0.1 — interface web de gestion des alertes (silences, etc.),
+      # jamais public. Tunnel SSH : ssh -L 9093:localhost:9093 ...
+      - "127.0.0.1:9093:9093"
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -88,6 +104,7 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
+  alertmanager_data:
 
 networks:
   default:

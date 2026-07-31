@@ -1,0 +1,29 @@
+# ────────────────────────────────────────────────────────────────────────────
+# Copiez ce fichier en "alertmanager.yml" (dans ce même dossier) et remplissez
+# vos identifiants SMTP. Ne commitez JAMAIS alertmanager.yml (il contient un
+# mot de passe) — il est déjà exclu via .gitignore.
+# ────────────────────────────────────────────────────────────────────────────
+
+global:
+  # Exemple Gmail : smtp.gmail.com:587 — nécessite un "mot de passe
+  # d'application" (compte Google → Sécurité → Validation en 2 étapes →
+  # Mots de passe des applications), PAS votre mot de passe Gmail normal.
+  # Autre fournisseur (Mailgun, SendGrid, OVH, etc.) : adapter smtp_smarthost.
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'ndawwune-alerts@example.com'
+  smtp_auth_username: 'ndawwune-alerts@example.com'
+  smtp_auth_password: 'CHANGEZ_MOI_mot_de_passe_application'
+  smtp_require_tls: true
+
+route:
+  receiver: email
+  group_by: ['alertname']
+  group_wait: 30s        # attend 30s de regrouper les alertes similaires avant d'envoyer
+  group_interval: 5m      # délai mini entre deux envois pour un même groupe
+  repeat_interval: 4h     # renvoie un rappel si l'alerte est toujours active après 4h
+
+receivers:
+  - name: email
+    email_configs:
+      - to: 'votre-email@example.com'
+        send_resolved: true   # envoie aussi un message quand l'alerte se résout
