@@ -7,7 +7,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.deps import DB, MobileUser
 from app.core.security import create_download_token, decode_token, is_token_revoked
 from app.models.document import Document
+from app.models.school import School
 from app.models.user import User, UserRole, UserStatus
 from app.schemas.document import DocumentResponse
 
@@ -28,11 +29,23 @@ def _uploads_dir() -> Path:
 # ── Liste ──────────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=List[DocumentResponse])
-async def list_ressources(db: DB, _: MobileUser) -> List[DocumentResponse]:
-    """Liste toutes les ressources pédagogiques disponibles."""
-    result = await db.execute(
-        select(Document).order_by(Document.created_at.desc())
-    )
+async def list_ressources(db: DB, user: MobileUser) -> List[DocumentResponse]:
+    """
+    Liste les ressources pédagogiques disponibles pour l'utilisateur : celles
+    sans langue définie (communes à toutes les langues) + celles dans la
+    langue d'enseignement de son école.
+    """
+    school_langue: str | None = None
+    if user.school_id:
+        result = await db.execute(select(School.langue).where(School.id == user.school_id))
+        school_langue = result.scalar_one_or_none()
+
+    query = select(Document)
+    if school_langue:
+        query = query.where(or_(Document.langue.is_(None), Document.langue == school_langue))
+    query = query.order_by(Document.created_at.desc())
+
+    result = await db.execute(query)
     return result.scalars().all()
 
 

@@ -35,6 +35,9 @@ class Document(UUIDMixin, TimestampMixin, Base):
     # Type de ressource : "document" | "video" | "autre"
     resource_type: Mapped[str] = mapped_column(String(20), nullable=False, default="document")
 
+    # Langue nationale à laquelle ce document s'adresse (ex: "wolof"). NULL = toutes langues.
+    langue: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     # Qui a uploadé le fichier
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

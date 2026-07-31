@@ -22,6 +22,7 @@ from app.models.evaluation_competence import EvaluationCompetence
 from app.models.seance import RapportProf
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
+from app.services.progression_service import get_config_for
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -72,6 +73,8 @@ class SupervisorSyncPayload(BaseModel):
     assigned_teachers: list[AssignedTeacher]
     active_session: Optional[ActiveSessionInfo] = None
     evaluation_competences: list[EvaluationCompetenceItem] = []
+    nb_semaines: int = 10
+    nb_jours:    int = 3
 
 
 # ── Route ─────────────────────────────────────────────────────────────────────
@@ -164,10 +167,17 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
         for c in competences_rows
     ]
 
+    # ── Nombre de semaines/jours du programme (même config que la partie tuteur) ──
+    nb_semaines, nb_jours = await get_config_for(
+        db, None, session.id if session else None
+    )
+
     return SupervisorSyncPayload(
         synced_at=datetime.now(timezone.utc).isoformat(),
         profile=profile,
         assigned_teachers=assigned_teachers,
         active_session=active_session,
         evaluation_competences=evaluation_competences,
+        nb_semaines=nb_semaines,
+        nb_jours=nb_jours,
     )

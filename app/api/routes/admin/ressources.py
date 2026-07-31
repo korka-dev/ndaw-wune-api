@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.deps import AdminUser, DB
 from app.core.upload_utils import ALLOWED_RESOURCE_EXTENSIONS, check_extension_allowed, read_upload_capped
 from app.models.document import Document
-from app.schemas.document import DocumentResponse
+from app.schemas.document import DocumentResponse, DocumentUpdate
 
 router = APIRouter(prefix="/ressources", tags=["Admin — Ressources"])
 
@@ -46,6 +46,7 @@ async def upload_document(
     title: str | None = Form(default=None),
     description: str | None = Form(default=None),
     resource_type: str | None = Form(default=None),
+    langue: str | None = Form(default=None),
 ) -> DocumentResponse:
     # Nom original nettoyé (garde uniquement le nom de base, sans chemin)
     original_filename = Path(file.filename or "fichier").name
@@ -92,9 +93,32 @@ async def upload_document(
         file_size=file_size,
         description=(description or "").strip() or None,
         resource_type=effective_type,
+        langue=(langue or "").strip() or None,
         uploaded_by=current_user.id,
     )
     db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+    return doc
+
+
+# ── Mise à jour des métadonnées ──────────────────────────────────────────────────
+
+@router.patch("/{doc_id}", response_model=DocumentResponse)
+async def update_document(doc_id: uuid.UUID, payload: DocumentUpdate, db: DB, _: AdminUser) -> DocumentResponse:
+    result = await db.execute(select(Document).where(Document.id == doc_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+
+    data = payload.model_dump(exclude_unset=True)
+    if "title" in data:
+        doc.title = (data["title"] or "").strip() or doc.title
+    if "description" in data:
+        doc.description = (data["description"] or "").strip() or None
+    if "langue" in data:
+        doc.langue = (data["langue"] or "").strip() or None
+
     await db.commit()
     await db.refresh(doc)
     return doc
