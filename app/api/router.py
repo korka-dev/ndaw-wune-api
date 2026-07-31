@@ -6,7 +6,7 @@ from app.api.routes.admin import (
     superviseurs, evaluateurs, eleves,
     suivi_seances, suivi_superviseurs, suivi_plannings, suivi_evaluations,
     rapports_journalier as admin_rapports_journalier,
-    ressources, classes, rapport_questions, rapport_difficultes, evaluation_competences,
+    ressources, classes, rapport_questions, rapport_difficultes, rapport_libelles, evaluation_competences,
     audit_logs, dashboard_stats, evaluation_sujets, evaluation_docs,
     usage_logs as admin_usage_logs,
     remarques as admin_remarques,
@@ -54,6 +54,7 @@ api_router.include_router(suivi_plannings.router,          prefix="/admin")
 api_router.include_router(ressources.router,               prefix="/admin")
 api_router.include_router(rapport_questions.router,         prefix="/admin")
 api_router.include_router(rapport_difficultes.router,        prefix="/admin")
+api_router.include_router(rapport_libelles.router,           prefix="/admin")
 api_router.include_router(evaluation_competences.router,    prefix="/admin")
 api_router.include_router(audit_logs.router,                prefix="/admin")
 api_router.include_router(dashboard_stats.router,           prefix="/admin")  # GET /admin/dashboard/stats

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.eleve import Eleve
 from app.models.planning import PlanningSegment
 from app.models.rapport_difficulte import RapportDifficulte
+from app.models.rapport_libelle import RapportLibelle
 from app.models.rapport_question import RapportQuestion
 from app.models.school import School
 from app.models.session import ProgramSession, SessionStatus, TeacherSession
@@ -144,6 +145,14 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
     ).scalars().all()
     rapport_difficultes_items = [SyncRapportDifficulte.model_validate(d) for d in difficultes_rows]
 
+    # ── Libellés éditables des champs fixes du rapport (configurés par l'admin) ──
+    libelles_rows = (
+        await db.execute(
+            select(RapportLibelle).where(RapportLibelle.cible == "tuteur")
+        )
+    ).scalars().all()
+    rapport_libelles = {l.cle: l.texte for l in libelles_rows}
+
     # ── Nombre de semaines/jours du programme (configurable école/session) ──
     nb_semaines, nb_jours = await get_config_for(
         db, user.school_id, active.id if active else None
@@ -158,6 +167,7 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         eleves=eleves_items,
         rapport_questions=rapport_questions_items,
         rapport_difficultes=rapport_difficultes_items,
+        rapport_libelles=rapport_libelles,
         nb_semaines=nb_semaines,
         nb_jours=nb_jours,
     )

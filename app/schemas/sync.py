@@ -99,5 +99,6 @@ class SyncPayload(BaseModel):
     eleves:           List[SyncEleve] = []
     rapport_questions:  List[SyncRapportQuestion]  = []
     rapport_difficultes: List[SyncRapportDifficulte] = []
+    rapport_libelles:   dict[str, str] = {}
     nb_semaines: int = 10
     nb_jours:    int = 3

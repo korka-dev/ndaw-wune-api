@@ -19,6 +19,7 @@ from sqlalchemy import select, func
 
 from app.core.deps import DB, SuperviseurUser
 from app.models.evaluation_competence import EvaluationCompetence
+from app.models.rapport_libelle import RapportLibelle
 from app.models.rapport_question import RapportQuestion
 from app.models.seance import RapportProf
 from app.models.session import ProgramSession, SessionStatus
@@ -76,6 +77,7 @@ class SupervisorSyncPayload(BaseModel):
     active_session: Optional[ActiveSessionInfo] = None
     evaluation_competences: list[EvaluationCompetenceItem] = []
     rapport_questions: list[SyncRapportQuestion] = []
+    rapport_libelles: dict[str, str] = {}
     nb_semaines: int = 10
     nb_jours:    int = 3
 
@@ -184,6 +186,14 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
     ).scalars().all()
     rapport_questions = [SyncRapportQuestion.model_validate(q) for q in questions_rows]
 
+    # ── Libellés éditables des champs fixes du rapport superviseur ───────────
+    libelles_rows = (
+        await db.execute(
+            select(RapportLibelle).where(RapportLibelle.cible == "superviseur")
+        )
+    ).scalars().all()
+    rapport_libelles = {l.cle: l.texte for l in libelles_rows}
+
     # ── Nombre de semaines/jours du programme (même config que la partie tuteur) ──
     nb_semaines, nb_jours = await get_config_for(
         db, None, session.id if session else None
@@ -196,6 +206,7 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
         active_session=active_session,
         evaluation_competences=evaluation_competences,
         rapport_questions=rapport_questions,
+        rapport_libelles=rapport_libelles,
         nb_semaines=nb_semaines,
         nb_jours=nb_jours,
     )
