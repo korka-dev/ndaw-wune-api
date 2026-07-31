@@ -22,6 +22,10 @@ class RapportQuestion(Base, UUIDMixin, TimestampMixin):
     required: Mapped[bool]             = mapped_column(Boolean, default=False, nullable=False)
     active:   Mapped[bool]             = mapped_column(Boolean, default=True, nullable=False)
     ordre:    Mapped[int]              = mapped_column(Integer, default=0, nullable=False)
+    # tuteur | superviseur | tous — rôle mobile à qui la question est destinée
+    cible:    Mapped[str]              = mapped_column(
+        String(20), default="tuteur", server_default="tuteur", nullable=False
+    )
 
     def __repr__(self) -> str:
         return f"<RapportQuestion {self.label!r}>"

@@ -39,3 +39,27 @@ async def close_redis() -> None:
         await _redis.aclose()
         _redis = None
         logger.info("Connexion Redis fermée.")
+
+
+async def invalidate_sync_caches() -> None:
+    """
+    Supprime tous les caches de synchronisation (clés sync:* — enseignants
+    et superviseurs) afin que les mobiles reçoivent des données fraîches au
+    prochain appel /app/sync ou /app/supervisor/sync.
+    À appeler après toute modification admin de données synchronisées
+    (planning, questions de rapport, difficultés, config de progression…).
+    """
+    try:
+        redis = await get_redis()
+        keys  = await redis.keys("sync:*")
+        if keys:
+            deleted = await redis.delete(*keys)
+            logger.info("[Cache] Cache Redis invalidé : %d clé(s) supprimée(s)", deleted)
+        else:
+            logger.info("[Cache] Aucune clé sync:* à supprimer")
+    except Exception as exc:
+        logger.error(
+            "[Cache] ⚠️  Impossible d'invalider le cache Redis : %s. "
+            "Les mobiles recevront les nouvelles données au plus tard à l'expiration du TTL.",
+            exc,
+        )

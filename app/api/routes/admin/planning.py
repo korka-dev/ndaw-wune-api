@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, select
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
-from app.core.redis import get_redis
+from app.core.redis import invalidate_sync_caches as _invalidate_sync_caches
 from app.models.planning import PlanningSegment
 from app.models.user import User
 from app.schemas.planning import (
@@ -18,31 +18,6 @@ from app.schemas.planning import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-async def _invalidate_sync_caches() -> None:
-    """
-    Supprime tous les caches de synchronisation des enseignants (clés sync:*).
-    À appeler après toute modification du planning afin que les mobiles
-    reçoivent les données fraîches au prochain appel /app/sync.
-    """
-    try:
-        redis = await get_redis()
-        keys  = await redis.keys("sync:*")
-        if keys:
-            deleted = await redis.delete(*keys)
-            logger.info("[Planning] Cache Redis invalidé : %d clé(s) supprimée(s)", deleted)
-        else:
-            logger.info("[Planning] Cache Redis : aucune clé sync:* à supprimer")
-    except Exception as exc:
-        # Logguer l'erreur clairement — le planning est bien sauvé en DB
-        # mais les enseignants devront attendre l'expiration naturelle du cache (TTL)
-        logger.error(
-            "[Planning] ⚠️  Impossible d'invalider le cache Redis : %s. "
-            "Les mobiles recevront les nouvelles données dans au plus %d secondes (TTL).",
-            exc,
-            300,
-        )
 
 # ── Correspondance nom de jour → indice (0 = Jour 1) ─────────────────────────
 # Accepte les noms français classiques ET le format séquentiel "Jour 1/2/..."

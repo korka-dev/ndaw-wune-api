@@ -19,9 +19,11 @@ from sqlalchemy import select, func
 
 from app.core.deps import DB, SuperviseurUser
 from app.models.evaluation_competence import EvaluationCompetence
+from app.models.rapport_question import RapportQuestion
 from app.models.seance import RapportProf
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
+from app.schemas.sync import SyncRapportQuestion
 from app.services.progression_service import get_config_for
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
@@ -73,6 +75,7 @@ class SupervisorSyncPayload(BaseModel):
     assigned_teachers: list[AssignedTeacher]
     active_session: Optional[ActiveSessionInfo] = None
     evaluation_competences: list[EvaluationCompetenceItem] = []
+    rapport_questions: list[SyncRapportQuestion] = []
     nb_semaines: int = 10
     nb_jours:    int = 3
 
@@ -167,6 +170,20 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
         for c in competences_rows
     ]
 
+    # ── Questions complémentaires du rapport superviseur (configurées par l'admin) ──
+    # Ne renvoie que les questions destinées au superviseur (ou à "tous").
+    questions_rows = (
+        await db.execute(
+            select(RapportQuestion)
+            .where(
+                RapportQuestion.active.is_(True),
+                RapportQuestion.cible.in_(["superviseur", "tous"]),
+            )
+            .order_by(RapportQuestion.ordre, RapportQuestion.created_at)
+        )
+    ).scalars().all()
+    rapport_questions = [SyncRapportQuestion.model_validate(q) for q in questions_rows]
+
     # ── Nombre de semaines/jours du programme (même config que la partie tuteur) ──
     nb_semaines, nb_jours = await get_config_for(
         db, None, session.id if session else None
@@ -178,6 +195,7 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
         assigned_teachers=assigned_teachers,
         active_session=active_session,
         evaluation_competences=evaluation_competences,
+        rapport_questions=rapport_questions,
         nb_semaines=nb_semaines,
         nb_jours=nb_jours,
     )

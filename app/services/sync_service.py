@@ -121,10 +121,14 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         eleves_items = [SyncEleve.model_validate(e) for e in rows]
 
     # ── Questions complémentaires du rapport journalier (configurées par l'admin) ──
+    # Ne renvoie que les questions destinées au tuteur (ou à "tous").
     questions_rows = (
         await db.execute(
             select(RapportQuestion)
-            .where(RapportQuestion.active.is_(True))
+            .where(
+                RapportQuestion.active.is_(True),
+                RapportQuestion.cible.in_(["tuteur", "tous"]),
+            )
             .order_by(RapportQuestion.ordre, RapportQuestion.created_at)
         )
     ).scalars().all()

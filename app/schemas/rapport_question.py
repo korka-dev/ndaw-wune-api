@@ -16,6 +16,12 @@ class RapportQuestionType(str, Enum):
     choix_multiple = "choix_multiple"
 
 
+class RapportQuestionCible(str, Enum):
+    tuteur      = "tuteur"
+    superviseur = "superviseur"
+    tous        = "tous"
+
+
 # ── Création ──────────────────────────────────────────────────────────────────
 
 class RapportQuestionCreate(BaseModel):
@@ -25,6 +31,7 @@ class RapportQuestionCreate(BaseModel):
     required: bool = False
     active:   bool = True
     ordre:    int  = 0
+    cible:    RapportQuestionCible = RapportQuestionCible.tuteur
 
     @field_validator("label")
     @classmethod
@@ -44,6 +51,7 @@ class RapportQuestionUpdate(BaseModel):
     required: Optional[bool]             = None
     active:   Optional[bool]             = None
     ordre:    Optional[int]              = None
+    cible:    Optional[RapportQuestionCible] = None
 
     @field_validator("label")
     @classmethod
@@ -66,5 +74,6 @@ class RapportQuestionResponse(BaseModel):
     required: bool
     active:   bool
     ordre:    int
+    cible:    str
 
     model_config = {"from_attributes": True}

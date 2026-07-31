@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 
 from app.core.deps import AdminUser, DB
+from app.core.redis import invalidate_sync_caches
 from app.models.rapport_question import RapportQuestion
 from app.schemas.rapport_question import (
     RapportQuestionCreate,
@@ -43,6 +44,7 @@ async def create_rapport_question(body: RapportQuestionCreate, db: DB, _: AdminU
     obj = RapportQuestion(**body.model_dump())
     db.add(obj)
     await db.flush()
+    await invalidate_sync_caches()
     return obj
 
 
@@ -54,6 +56,7 @@ async def update_rapport_question(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(obj, field, value)
     await db.flush()
+    await invalidate_sync_caches()
     return obj
 
 
@@ -61,4 +64,5 @@ async def update_rapport_question(
 async def delete_rapport_question(question_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
     obj = await _get_or_404(db, question_id)
     await db.delete(obj)
+    await invalidate_sync_caches()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
