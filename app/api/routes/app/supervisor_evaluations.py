@@ -221,7 +221,20 @@ async def list_evaluations(
     return EvaluationsPayload(evaluations=items, total=len(items))
 
 
-RESULTATS_VALIDES = {"acquis", "a_aider"}
+# Échelle à 3 niveaux utilisée par l'app superviseur. Le vocabulaire de
+# l'évaluation (réussi / intermédiaire / pas réussi) est converti vers celui,
+# pédagogique, que l'app enseignant affiche (acquis / en cours / à aider) —
+# ainsi une évaluation faite par le superviseur apparaît directement chez
+# l'enseignant, sans traitement supplémentaire.
+_EQUIVALENCES_RESULTAT = {
+    "reussi":        "acquis",
+    "intermediaire": "en_cours",
+    "pas_reussi":    "a_aider",
+    "acquis":        "acquis",
+    "en_cours":      "en_cours",
+    "a_aider":       "a_aider",
+}
+RESULTATS_VALIDES = set(_EQUIVALENCES_RESULTAT)
 
 
 @router.post("/evaluations", status_code=status.HTTP_201_CREATED)
@@ -256,8 +269,9 @@ async def submit_evaluations(
         if ev.resultat not in RESULTATS_VALIDES:
             raise HTTPException(
                 status_code=422,
-                detail=f"Résultat invalide : '{ev.resultat}'. Valeurs : {RESULTATS_VALIDES}",
+                detail=f"Résultat invalide : '{ev.resultat}'. Valeurs : {sorted(RESULTATS_VALIDES)}",
             )
+        resultat_norm = _EQUIVALENCES_RESULTAT[ev.resultat]
         try:
             eleve_uuid = uuid.UUID(ev.eleve_id)
         except ValueError:
@@ -278,7 +292,7 @@ async def submit_evaluations(
         )).scalar_one_or_none()
 
         if existing:
-            existing.resultat    = ev.resultat
+            existing.resultat    = resultat_norm
             existing.commentaire = ev.commentaire
             existing.updated_at  = now
             updated += 1
@@ -289,7 +303,7 @@ async def submit_evaluations(
                 eleve_id=eleve_uuid,
                 session_id=session_id,
                 competence=ev.competence,
-                resultat=ev.resultat,
+                resultat=resultat_norm,
                 date_eval=eval_date,
                 commentaire=ev.commentaire,
                 created_at=now,
