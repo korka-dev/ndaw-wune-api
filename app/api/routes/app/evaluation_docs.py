@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 import logging
-import uuid
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.deps import DB, SuperviseurUser
+from app.core.langue import langue_matches
 from app.models.evaluation_doc import EvaluationDoc
-from app.models.school import School
-from app.models.user import User
+from app.services.supervisor_service import resolve_supervisor_langue
 
 logger = logging.getLogger(__name__)
 
@@ -28,49 +27,6 @@ class EvaluationDocOut(BaseModel):
     operations: list[str]
 
 
-async def _langue_superviseur(db, supervisor: User) -> str | None:
-    """
-    Détermine la langue d'enseignement du superviseur.
-
-    1. Langue de son école de rattachement (cas normal).
-    2. À défaut, langue des écoles de ses enseignants assignés (leurs UUIDs sont
-       stockés dans supervisor.classes) — couvre un superviseur sans école
-       rattachée mais affecté à des enseignants.
-    Retourne None si rien n'est déterminable : dans ce cas aucun dossier n'est
-    proposé, car laisser choisir la langue risquerait de faire évaluer un élève
-    avec le support d'une autre langue.
-    """
-    if supervisor.school and supervisor.school.langue:
-        return supervisor.school.langue.strip()
-
-    teacher_ids: list[uuid.UUID] = []
-    for raw in (supervisor.classes or []):
-        try:
-            teacher_ids.append(uuid.UUID(str(raw)))
-        except (ValueError, AttributeError):
-            continue
-    if not teacher_ids:
-        return None
-
-    langues = (await db.execute(
-        select(School.langue)
-        .join(User, User.school_id == School.id)
-        .where(User.id.in_(teacher_ids), School.langue.isnot(None))
-        .distinct()
-    )).scalars().all()
-
-    valeurs = {l.strip().lower() for l in langues if l and l.strip()}
-    if len(valeurs) == 1:
-        return valeurs.pop()
-    if len(valeurs) > 1:
-        logger.warning(
-            "[EvaluationDocs] Superviseur %s supervise plusieurs langues (%s) — "
-            "aucun dossier proposé, rattachez-le à une école.",
-            supervisor.id, ", ".join(sorted(valeurs)),
-        )
-    return None
-
-
 @router.get("/evaluation-docs", response_model=list[EvaluationDocOut])
 async def list_active_docs(current_user: SuperviseurUser, db: DB) -> list[EvaluationDocOut]:
     """
@@ -81,10 +37,10 @@ async def list_active_docs(current_user: SuperviseurUser, db: DB) -> list[Evalua
     laquelle il est assigné. Un superviseur en école wolof reçoit le dossier
     wolof, en école seereer le dossier seereer, etc.
 
-    La comparaison est insensible à la casse : les écoles enregistrent la langue
-    en minuscules ("wolof") alors que les dossiers la capitalisent ("Wolof").
+    La comparaison passe par canonical_langue : casse, accents et orthographes
+    connues sont neutralisés ("Sérère" et "seereer" désignent la même langue).
     """
-    langue = await _langue_superviseur(db, current_user)
+    langue = await resolve_supervisor_langue(db, current_user)
     if not langue:
         logger.warning(
             "[EvaluationDocs] Langue d'enseignement indéterminable pour le "
@@ -94,12 +50,10 @@ async def list_active_docs(current_user: SuperviseurUser, db: DB) -> list[Evalua
 
     rows = (await db.execute(
         select(EvaluationDoc)
-        .where(
-            EvaluationDoc.is_active.is_(True),
-            func.lower(EvaluationDoc.langue) == func.lower(langue),
-        )
+        .where(EvaluationDoc.is_active.is_(True))
         .order_by(EvaluationDoc.created_at)
     )).scalars().all()
+    rows = [d for d in rows if langue_matches(d.langue, langue)]
 
     return [
         EvaluationDocOut(

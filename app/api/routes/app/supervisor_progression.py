@@ -6,8 +6,6 @@ Route :
 """
 from __future__ import annotations
 
-import uuid
-
 from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -15,6 +13,7 @@ from sqlalchemy import select
 from app.core.deps import DB, SuperviseurUser
 from app.models.user import User
 from app.services.progression_service import get_latest_progression_by_teacher
+from app.services.supervisor_service import get_supervised_teacher_ids
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -34,15 +33,7 @@ class ProgressionPayload(BaseModel):
 
 @router.get("/progression", response_model=ProgressionPayload)
 async def supervisor_progression(current_user: SuperviseurUser, db: DB) -> ProgressionPayload:
-    if not current_user.classes:
-        return ProgressionPayload(items=[])
-
-    teacher_ids: list[uuid.UUID] = []
-    for id_str in current_user.classes:
-        try:
-            teacher_ids.append(uuid.UUID(id_str))
-        except ValueError:
-            continue
+    teacher_ids = await get_supervised_teacher_ids(db, current_user)
     if not teacher_ids:
         return ProgressionPayload(items=[])
 

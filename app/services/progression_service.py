@@ -21,8 +21,13 @@ async def get_config_for(
     school_id: Optional[uuid.UUID],
     session_id: Optional[uuid.UUID],
 ) -> tuple[int, int]:
-    """Résout (nb_semaines, nb_jours) avec repli :
-    (école, session) exact → (école, global) → (global, session) → défaut (10, 3)."""
+    """Résout (nb_semaines, nb_jours) du plus précis au plus général :
+    (école, session) → (école, toutes sessions) → (toutes écoles, session)
+    → (toutes écoles, toutes sessions) → défaut (10, 3).
+
+    La dernière étape est la configuration « repli global » (school_id et
+    session_id à NULL) : c'est celle que l'admin crée par défaut, elle doit
+    donc toujours être consultée avant de retomber sur les constantes."""
     candidates: list[tuple[Optional[uuid.UUID], Optional[uuid.UUID]]] = []
     if school_id is not None and session_id is not None:
         candidates.append((school_id, session_id))
@@ -30,6 +35,7 @@ async def get_config_for(
         candidates.append((school_id, None))
     if session_id is not None:
         candidates.append((None, session_id))
+    candidates.append((None, None))
 
     for s_id, sess_id in candidates:
         row = (

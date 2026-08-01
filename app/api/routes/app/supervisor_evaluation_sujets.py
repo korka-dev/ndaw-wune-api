@@ -7,6 +7,7 @@ Routes :
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -19,11 +20,15 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.deps import DB, SuperviseurUser
+from app.core.langue import langue_matches
 from app.core.upload_utils import ALLOWED_AUDIO_EXTENSIONS, check_extension_allowed, read_upload_capped
 from app.models.eleve import Eleve
 from app.models.evaluation_sujet import EvaluationSujet
 from app.models.evaluation_tirage import EvaluationTirage
 from app.models.user import User
+from app.services.supervisor_service import get_supervised_teacher_ids, resolve_supervisor_langue
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur Évaluations Sujets"])
 
@@ -62,20 +67,9 @@ def _audio_url(filename: Optional[str]) -> Optional[str]:
     return f"/api/v1/app/supervisor/evaluation-audio/{filename}"
 
 
-async def _get_supervisor_teacher_ids(supervisor: User) -> list[uuid.UUID]:
-    """Retourne les UUIDs des enseignants assignés à ce superviseur."""
-    ids: list[uuid.UUID] = []
-    for s in (supervisor.classes or []):
-        try:
-            ids.append(uuid.UUID(str(s)))
-        except (ValueError, AttributeError):
-            pass
-    return ids
-
-
 async def _get_supervisor_school_classe_pairs(db, supervisor: User) -> list[tuple[uuid.UUID, str]]:
-    """Retourne les paires (école, classe) couvertes par les enseignants assignés à ce superviseur."""
-    teacher_ids = await _get_supervisor_teacher_ids(supervisor)
+    """Retourne les paires (école, classe) couvertes par les enseignants supervisés."""
+    teacher_ids = await get_supervised_teacher_ids(db, supervisor)
     if not teacher_ids:
         return []
     teachers = (await db.execute(
@@ -125,18 +119,31 @@ async def list_evaluation_sujets(
     if not school_classe_pairs:
         return []
 
-    # Langue d'enseignement de l'école du superviseur : seuls les sujets de
-    # cette langue (ou sans langue = toutes) lui sont proposés.
-    langue_ecole: str | None = current_user.school.langue if current_user.school else None
+    # Langue d'enseignement du superviseur : seuls les sujets de cette langue
+    # (ou sans langue = toutes langues) lui sont proposés.
+    #
+    # La comparaison passe par canonical_langue : les langues sont saisies en
+    # texte libre et les orthographes divergent d'une table à l'autre
+    # ("Pulaar"/"poular", "Sérère"/"seereer"…). L'égalité stricte utilisée
+    # auparavant ne faisait correspondre que « wolof », écrit identiquement
+    # partout — les autres langues ne voyaient donc aucun sujet.
+    langue_superviseur = await resolve_supervisor_langue(db, current_user)
 
-    sujets_query = select(EvaluationSujet).order_by(EvaluationSujet.created_at.desc())
-    if langue_ecole:
-        sujets_query = sujets_query.where(
-            (EvaluationSujet.langue.is_(None)) | (EvaluationSujet.langue == langue_ecole)
-        )
-    sujets = (await db.execute(sujets_query)).scalars().all()
+    sujets = (await db.execute(
+        select(EvaluationSujet).order_by(EvaluationSujet.created_at.desc())
+    )).scalars().all()
+
+    if langue_superviseur:
+        sujets = [
+            s for s in sujets
+            if not s.langue or langue_matches(s.langue, langue_superviseur)
+        ]
 
     if not sujets:
+        logger.warning(
+            "[EvaluationSujets] Aucun sujet pour le superviseur %s (langue=%s).",
+            current_user.id, langue_superviseur,
+        )
         return []
 
     # Pour chaque sujet, récupère les tirages dont l'élève est dans les classes supervisées

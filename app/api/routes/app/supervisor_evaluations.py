@@ -20,6 +20,7 @@ from app.models.eleve import Eleve
 from app.models.evaluation_eleve import EvaluationEleve
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
+from app.services.supervisor_service import get_supervised_teacher_ids, is_supervised_teacher
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -87,16 +88,7 @@ async def supervisor_eleves(current_user: SuperviseurUser, db: DB) -> ElevesPayl
     Retourne TOUS les enseignants assignés + métadonnées de leurs classes (comptages uniquement).
     Les élèves détaillés sont chargés à la demande via GET /classe-eleves.
     """
-    if not current_user.classes:
-        return ElevesPayload(teachers=[])
-
-    teacher_ids: list[uuid.UUID] = []
-    for id_str in current_user.classes:
-        try:
-            teacher_ids.append(uuid.UUID(id_str))
-        except ValueError:
-            continue
-
+    teacher_ids = await get_supervised_teacher_ids(db, current_user)
     if not teacher_ids:
         return ElevesPayload(teachers=[])
 
@@ -144,14 +136,14 @@ async def get_classe_eleves(
     Charge les élèves d'une classe spécifique, à la demande (lazy loading).
     Vérifie que l'enseignant est bien assigné à ce superviseur.
     """
-    # Vérifier que cet enseignant est bien assigné à ce superviseur
-    if teacher_id not in (current_user.classes or []):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Enseignant non assigné.")
-
     try:
         tid = uuid.UUID(teacher_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="teacher_id invalide.")
+
+    # Vérifier que cet enseignant relève bien de ce superviseur
+    if not await is_supervised_teacher(db, current_user, tid):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Enseignant non assigné.")
 
     teacher_result = await db.execute(select(User).where(User.id == tid))
     teacher = teacher_result.scalar_one_or_none()

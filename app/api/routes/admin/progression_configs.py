@@ -63,7 +63,29 @@ async def update_progression_config(
     config_id: uuid.UUID, body: ProgressionConfigUpdate, db: DB, _: AdminUser
 ) -> ProgressionConfigResponse:
     obj = await _get_or_404(db, config_id)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+
+    # La portée (école / session) peut changer : vérifier qu'aucune autre
+    # configuration ne couvre déjà la nouvelle combinaison (contrainte unique).
+    new_school  = data.get("school_id",  obj.school_id)
+    new_session = data.get("session_id", obj.session_id)
+    if (new_school, new_session) != (obj.school_id, obj.session_id):
+        clash = (
+            await db.execute(
+                select(ProgressionConfig).where(
+                    ProgressionConfig.school_id == new_school,
+                    ProgressionConfig.session_id == new_session,
+                    ProgressionConfig.id != obj.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Une configuration existe déjà pour cette combinaison école/session.",
+            )
+
+    for field, value in data.items():
         setattr(obj, field, value)
     await db.flush()
     return obj

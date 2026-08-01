@@ -25,6 +25,7 @@ from app.schemas.rapport_difficulte_resolution import (
     RapportDifficulteResolutionResponse,
 )
 from app.services.difficulte_resolution_service import get_resolutions_map, set_resolution
+from app.services.supervisor_service import get_supervised_teacher_ids, is_supervised_teacher
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -58,16 +59,7 @@ async def supervisor_difficultes(current_user: SuperviseurUser, db: DB) -> Diffi
     Retourne les rapports journaliers des enseignants assignés au superviseur
     qui contiennent au moins une difficulté signalée (hors "Aucune").
     """
-    if not current_user.classes:
-        return DifficultesPayload(items=[], total=0)
-
-    teacher_ids: list[uuid.UUID] = []
-    for id_str in current_user.classes:
-        try:
-            teacher_ids.append(uuid.UUID(id_str))
-        except ValueError:
-            continue
-
+    teacher_ids = await get_supervised_teacher_ids(db, current_user)
     if not teacher_ids:
         return DifficultesPayload(items=[], total=0)
 
@@ -137,13 +129,7 @@ async def resolve_supervisor_difficulte(
     if rapport is None:
         raise HTTPException(status_code=404, detail="Rapport introuvable.")
 
-    allowed_teacher_ids = set()
-    for id_str in current_user.classes or []:
-        try:
-            allowed_teacher_ids.add(uuid.UUID(id_str))
-        except ValueError:
-            continue
-    if rapport.teacher_id not in allowed_teacher_ids:
+    if not await is_supervised_teacher(db, current_user, rapport.teacher_id):
         raise HTTPException(status_code=403, detail="Ce rapport ne concerne pas un enseignant assigné.")
 
     obj = await set_resolution(

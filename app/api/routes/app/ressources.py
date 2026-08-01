@@ -7,12 +7,13 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import DB, MobileUser
+from app.core.langue import langue_matches
 from app.core.security import create_download_token, decode_token, is_token_revoked
 from app.models.document import Document
 from app.models.school import School
@@ -40,13 +41,17 @@ async def list_ressources(db: DB, user: MobileUser) -> List[DocumentResponse]:
         result = await db.execute(select(School.langue).where(School.id == user.school_id))
         school_langue = result.scalar_one_or_none()
 
-    query = select(Document)
-    if school_langue:
-        query = query.where(or_(Document.langue.is_(None), Document.langue == school_langue))
-    query = query.order_by(Document.created_at.desc())
+    docs = (await db.execute(
+        select(Document).order_by(Document.created_at.desc())
+    )).scalars().all()
 
-    result = await db.execute(query)
-    return result.scalars().all()
+    # Comparaison via canonical_langue plutôt qu'égalité stricte : les langues
+    # sont saisies en texte libre et les orthographes divergent entre écoles et
+    # documents ("Pulaar"/"poular", "Sérère"/"seereer"…).
+    if school_langue:
+        docs = [d for d in docs if not d.langue or langue_matches(d.langue, school_langue)]
+
+    return docs
 
 
 # ── Téléchargement ─────────────────────────────────────────────────────────────

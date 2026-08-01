@@ -26,6 +26,7 @@ from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
 from app.schemas.sync import SyncRapportQuestion
 from app.services.progression_service import get_config_for
+from app.services.supervisor_service import get_supervised_teacher_ids
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -119,15 +120,9 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
             langue=current_user.school.langue,
         )
 
-    # ── Enseignants assignés (stockés dans supervisor.classes comme UUIDs) ────
+    # ── Enseignants supervisés (assignation explicite, sinon école) ──────────
     assigned_teachers: list[AssignedTeacher] = []
-    teacher_uuids: list[uuid.UUID] = []
-    if current_user.classes:
-        for id_str in current_user.classes:
-            try:
-                teacher_uuids.append(uuid.UUID(id_str))
-            except ValueError:
-                continue
+    teacher_uuids = await get_supervised_teacher_ids(db, current_user)
 
     # Récupérer la date du dernier rapport pour chaque enseignant en un seul query
     last_rapport_map: dict[uuid.UUID, datetime] = {}
