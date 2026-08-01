@@ -42,6 +42,9 @@ class TirageAppOut(BaseModel):
     eleve_prenom: Optional[str] = None
     eleve_genre: Optional[str] = None
     eleve_classe: str
+    # Enseignant de l'élève — le superviseur évalue enseignant par enseignant.
+    teacher_id: Optional[str] = None
+    teacher_nom: Optional[str] = None
     present: Optional[bool] = None
     resultat: Optional[str] = None
     commentaire: Optional[str] = None
@@ -67,20 +70,33 @@ def _audio_url(filename: Optional[str]) -> Optional[str]:
     return f"/api/v1/app/supervisor/evaluation-audio/{filename}"
 
 
-async def _get_supervisor_school_classe_pairs(db, supervisor: User) -> list[tuple[uuid.UUID, str]]:
-    """Retourne les paires (école, classe) couvertes par les enseignants supervisés."""
+async def _get_supervisor_classe_map(
+    db, supervisor: User
+) -> dict[tuple[uuid.UUID, str], tuple[str, str]]:
+    """(école, classe) → (teacher_id, nom de l'enseignant) pour les enseignants supervisés.
+
+    Le superviseur travaille enseignant par enseignant : l'app a besoin de
+    rattacher chaque élève tiré à son enseignant pour présenter le pointage par
+    classe. Si deux enseignants partagent la même classe dans la même école, le
+    premier par ordre alphabétique l'emporte (cas marginal, évite un doublon).
+    """
     teacher_ids = await get_supervised_teacher_ids(db, supervisor)
     if not teacher_ids:
-        return []
+        return {}
     teachers = (await db.execute(
-        select(User).where(User.id.in_(teacher_ids))
+        select(User).where(User.id.in_(teacher_ids)).order_by(User.name)
     )).scalars().all()
-    pairs: list[tuple[uuid.UUID, str]] = []
+    classe_map: dict[tuple[uuid.UUID, str], tuple[str, str]] = {}
     for t in teachers:
         if t.school_id and t.classes:
             for cls in t.classes:
-                pairs.append((t.school_id, cls))
-    return pairs
+                classe_map.setdefault((t.school_id, cls), (str(t.id), t.name or "Enseignant"))
+    return classe_map
+
+
+async def _get_supervisor_school_classe_pairs(db, supervisor: User) -> list[tuple[uuid.UUID, str]]:
+    """Paires (école, classe) couvertes par les enseignants supervisés."""
+    return list((await _get_supervisor_classe_map(db, supervisor)).keys())
 
 
 async def _get_owned_tirage(db, tirage_id: uuid.UUID, current_user: User) -> EvaluationTirage:
@@ -115,8 +131,8 @@ async def list_evaluation_sujets(
     Retourne les sujets d'évaluation avec les élèves tirés au sort
     qui appartiennent aux classes supervisées par ce superviseur.
     """
-    school_classe_pairs = await _get_supervisor_school_classe_pairs(db, current_user)
-    if not school_classe_pairs:
+    classe_map = await _get_supervisor_classe_map(db, current_user)
+    if not classe_map:
         return []
 
     # Langue d'enseignement du superviseur : seuls les sujets de cette langue
@@ -163,7 +179,8 @@ async def list_evaluation_sujets(
             e = t.eleve
             if e is None:
                 continue
-            if any(e.school_id == sid and e.classe == cls for sid, cls in school_classe_pairs):
+            teacher = classe_map.get((e.school_id, e.classe))
+            if teacher is not None:
                 eleves_app.append(TirageAppOut(
                     tirage_id=str(t.id),
                     eleve_id=str(e.id),
@@ -171,6 +188,8 @@ async def list_evaluation_sujets(
                     eleve_prenom=e.prenom,
                     eleve_genre=e.genre,
                     eleve_classe=e.classe or "",
+                    teacher_id=teacher[0],
+                    teacher_nom=teacher[1],
                     present=t.present,
                     resultat=t.resultat,
                     commentaire=t.commentaire,

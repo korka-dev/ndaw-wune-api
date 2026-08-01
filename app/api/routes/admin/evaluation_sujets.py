@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
+from app.core.langue import langue_matches
 from app.models.eleve import Eleve
 from app.models.evaluation_sujet import EvaluationSujet
 from app.models.evaluation_tirage import EvaluationTirage
@@ -77,19 +78,28 @@ async def _random_eleves(db, nb_par_classe: int, langue: Optional[str] = None) -
 
     Si `langue` est fournie, seuls les élèves des écoles enseignant dans cette
     langue sont tirés (un sujet wolof ne concerne que les écoles wolof).
+
+    La comparaison des langues passe par `langue_matches` et non par une
+    égalité stricte : les langues sont saisies en texte libre, et le sélecteur
+    du dashboard met celle du sujet en minuscules alors que l'école conserve sa
+    valeur d'origine. Une école « Pulaar » face à un sujet « pulaar » aurait
+    produit un tirage VIDE, sans le moindre message d'erreur — le sujet
+    n'apparaissant alors chez aucun superviseur.
     """
+    from app.models.school import School
+
     pairs_query = (
-        select(Eleve.school_id, Eleve.classe)
+        select(Eleve.school_id, Eleve.classe, School.langue)
+        .join(School, School.id == Eleve.school_id)
         .where(Eleve.statut == "actif")
         .distinct()
     )
-    if langue:
-        from app.models.school import School
-        pairs_query = pairs_query.join(School, School.id == Eleve.school_id).where(
-            School.langue == langue
-        )
     pairs_result = await db.execute(pairs_query)
-    pairs = [(r[0], r[1]) for r in pairs_result.all() if r[0] and r[1]]
+    pairs = [
+        (school_id, cls)
+        for school_id, cls, school_langue in pairs_result.all()
+        if school_id and cls and (not langue or langue_matches(school_langue, langue))
+    ]
 
     selected_ids: list[uuid.UUID] = []
     for school_id, cls in pairs:
