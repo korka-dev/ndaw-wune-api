@@ -13,6 +13,7 @@ from app.models.document import Document                          # noqa: F401
 from app.models.evaluation_eleve import EvaluationEleve           # noqa: F401
 from app.models.evaluation_sujet import EvaluationSujet            # noqa: F401
 from app.models.evaluation_tirage import EvaluationTirage          # noqa: F401
+from app.models.evaluation_resultat import EvaluationResultat      # noqa: F401
 from app.models.supervisor_presence import SupervisorPresenceCheck  # noqa: F401
 from app.models.audit_log import AuditLog                           # noqa: F401
 from app.models.rapport_question import RapportQuestion             # noqa: F401

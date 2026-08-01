@@ -23,6 +23,7 @@ from app.core.deps import DB, SuperviseurUser
 from app.core.langue import langue_matches
 from app.core.upload_utils import ALLOWED_AUDIO_EXTENSIONS, check_extension_allowed, read_upload_capped
 from app.models.eleve import Eleve
+from app.models.evaluation_resultat import EvaluationResultat
 from app.models.evaluation_sujet import EvaluationSujet
 from app.models.evaluation_tirage import EvaluationTirage
 from app.models.user import User
@@ -299,14 +300,52 @@ async def submit_tirage(
         tirage.audio_filename = audio_filename
 
     now = datetime.now(timezone.utc)
+    aujourdhui = date.today()
+    commentaire_net = (commentaire or "").strip() or None
+
+    # Historique : une ligne par jour d'évaluation. Le même élève est évalué à
+    # chaque passage du superviseur ; sans cet enregistrement daté, chaque
+    # nouvelle évaluation écraserait la précédente et la progression serait
+    # perdue. Réévaluer le même jour corrige la ligne du jour.
+    existante = (
+        await db.execute(
+            select(EvaluationResultat).where(
+                EvaluationResultat.tirage_id == tirage.id,
+                EvaluationResultat.date_eval == aujourdhui,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existante is not None:
+        existante.resultat       = resultat
+        existante.commentaire    = commentaire_net
+        existante.superviseur_id = current_user.id
+        existante.updated_at     = now
+        if tirage.audio_filename:
+            existante.audio_filename = tirage.audio_filename
+    else:
+        db.add(EvaluationResultat(
+            id=uuid.uuid4(),
+            tirage_id=tirage.id,
+            superviseur_id=current_user.id,
+            date_eval=aujourdhui,
+            resultat=resultat,
+            commentaire=commentaire_net,
+            audio_filename=tirage.audio_filename,
+            created_at=now,
+            updated_at=now,
+        ))
+
+    # Le tirage conserve le dernier résultat : dashboard admin et app affichent
+    # l'état courant sans changement.
     tirage.resultat = resultat
-    tirage.commentaire = (commentaire or "").strip() or None
+    tirage.commentaire = commentaire_net
     tirage.superviseur_id = current_user.id
-    tirage.date_eval = date.today()
+    tirage.date_eval = aujourdhui
     tirage.updated_at = now
 
     await db.commit()
-    return {"status": "ok", "tirage_id": str(tirage_id), "resultat": resultat}
+    return {"status": "ok", "tirage_id": str(tirage_id), "resultat": resultat, "date_eval": aujourdhui.isoformat()}
 
 
 @router.get("/evaluation-audio/{filename}")
