@@ -61,6 +61,14 @@ class ActiveSessionInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SupSchoolInfo(BaseModel):
+    id:     str
+    name:   str
+    region: Optional[str] = None
+    city:   Optional[str] = None
+    langue: Optional[str] = None
+
+
 class EvaluationCompetenceItem(BaseModel):
     id:    str
     label: str
@@ -73,6 +81,7 @@ class EvaluationCompetenceItem(BaseModel):
 class SupervisorSyncPayload(BaseModel):
     synced_at:      str
     profile:        SupervisorProfile
+    school:         Optional[SupSchoolInfo] = None
     assigned_teachers: list[AssignedTeacher]
     active_session: Optional[ActiveSessionInfo] = None
     evaluation_competences: list[EvaluationCompetenceItem] = []
@@ -98,6 +107,17 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
         email=current_user.email,
         role=current_user.role.value,
     )
+
+    # ── École de rattachement (relation chargée en selectin sur User) ─────────
+    school_info: SupSchoolInfo | None = None
+    if current_user.school:
+        school_info = SupSchoolInfo(
+            id=str(current_user.school.id),
+            name=current_user.school.name,
+            region=current_user.school.region,
+            city=current_user.school.city,
+            langue=current_user.school.langue,
+        )
 
     # ── Enseignants assignés (stockés dans supervisor.classes comme UUIDs) ────
     assigned_teachers: list[AssignedTeacher] = []
@@ -202,6 +222,7 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
     return SupervisorSyncPayload(
         synced_at=datetime.now(timezone.utc).isoformat(),
         profile=profile,
+        school=school_info,
         assigned_teachers=assigned_teachers,
         active_session=active_session,
         evaluation_competences=evaluation_competences,

@@ -12,20 +12,25 @@ class SyncProfile(BaseModel):
     email:     Optional[str]
     phone:     Optional[str]
     role:      str
+    status:    Optional[str] = None
     school_id: Optional[uuid.UUID]
+    niveau:    Optional[List[str]] = None
     classes:   Optional[List[str]]
+    groupe_recherche: Optional[str] = None
     app_access: str = "full"
 
     model_config = {"from_attributes": True}
 
 
 class SyncSchool(BaseModel):
-    id:       uuid.UUID
-    name:     str
-    region:   Optional[str]
-    city:     Optional[str]
-    director: Optional[str]
-    langue:   Optional[str] = None
+    id:             uuid.UUID
+    name:           str
+    code_ecole:     Optional[int] = None
+    region:         Optional[str]
+    city:           Optional[str]
+    director:       Optional[str]
+    director_phone: Optional[str] = None
+    langue:         Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -89,6 +94,13 @@ class SyncRapportDifficulte(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SyncStats(BaseModel):
+    """Compteurs affichés sur la page profil de l'enseignant."""
+    nb_eleves: int = 0
+    nb_tests:  int = 0   # évaluations enregistrées pour ses élèves
+    nb_fiches: int = 0   # ressources documentaires disponibles pour sa langue
+
+
 class SyncPayload(BaseModel):
     """Payload complet téléchargé par l'app mobile pour fonctionner hors-ligne."""
     synced_at:        datetime
@@ -102,3 +114,4 @@ class SyncPayload(BaseModel):
     rapport_libelles:   dict[str, str] = {}
     nb_semaines: int = 10
     nb_jours:    int = 3
+    stats:       SyncStats = SyncStats()

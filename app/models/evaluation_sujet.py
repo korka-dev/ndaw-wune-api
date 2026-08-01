@@ -22,6 +22,10 @@ class EvaluationSujet(Base, UUIDMixin, TimestampMixin):
     titre: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Langue d'enseignement ciblée (ex: wolof, seereer, pulaar).
+    # NULL = sujet visible pour toutes les langues.
+    langue: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     # Nombre d'élèves à tirer par classe (0 = tous)
     nb_eleves_par_classe: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
 

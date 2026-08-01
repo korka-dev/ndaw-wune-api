@@ -31,6 +31,7 @@ class SujetCreate(BaseModel):
     titre: str
     description: Optional[str] = None
     nb_eleves_par_classe: int = 5    # 0 = tous les élèves
+    langue: Optional[str] = None     # None = toutes les langues
 
 
 class TirageOut(BaseModel):
@@ -53,6 +54,7 @@ class SujetOut(BaseModel):
     id: str
     titre: str
     description: Optional[str] = None
+    langue: Optional[str] = None
     nb_eleves_par_classe: int
     session_id: Optional[str] = None
     nb_tirages: int = 0
@@ -66,18 +68,27 @@ class SujetDetail(SujetOut):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _random_eleves(db, nb_par_classe: int) -> list[uuid.UUID]:
+async def _random_eleves(db, nb_par_classe: int, langue: Optional[str] = None) -> list[uuid.UUID]:
     """Tire aléatoirement nb_par_classe élèves par (school_id, classe) (actifs).
 
     On tire par paire école+classe (et non par classe toutes écoles confondues)
     afin que chaque superviseur voie les élèves de son école dans le tirage,
     même quand plusieurs écoles ont des classes portant le même nom.
+
+    Si `langue` est fournie, seuls les élèves des écoles enseignant dans cette
+    langue sont tirés (un sujet wolof ne concerne que les écoles wolof).
     """
-    pairs_result = await db.execute(
+    pairs_query = (
         select(Eleve.school_id, Eleve.classe)
         .where(Eleve.statut == "actif")
         .distinct()
     )
+    if langue:
+        from app.models.school import School
+        pairs_query = pairs_query.join(School, School.id == Eleve.school_id).where(
+            School.langue == langue
+        )
+    pairs_result = await db.execute(pairs_query)
     pairs = [(r[0], r[1]) for r in pairs_result.all() if r[0] and r[1]]
 
     selected_ids: list[uuid.UUID] = []
@@ -124,6 +135,7 @@ async def list_sujets(db: DB, _: AdminUser) -> list[SujetOut]:
             id=str(s.id),
             titre=s.titre,
             description=s.description,
+            langue=s.langue,
             nb_eleves_par_classe=s.nb_eleves_par_classe,
             session_id=str(s.session_id) if s.session_id else None,
             nb_tirages=nb_tirages,
@@ -153,10 +165,12 @@ async def create_sujet(body: SujetCreate, db: DB, current_user: AdminUser) -> Su
     active_session = session_result.scalars().first()
 
     now = datetime.now(timezone.utc)
+    langue_val = (body.langue or "").strip().lower() or None
     sujet = EvaluationSujet(
         id=uuid.uuid4(),
         titre=body.titre.strip(),
         description=(body.description or "").strip() or None,
+        langue=langue_val,
         nb_eleves_par_classe=body.nb_eleves_par_classe,
         session_id=active_session.id if active_session else None,
         created_by=current_user.id,
@@ -166,8 +180,8 @@ async def create_sujet(body: SujetCreate, db: DB, current_user: AdminUser) -> Su
     db.add(sujet)
     await db.flush()
 
-    # Tirage aléatoire
-    eleve_ids = await _random_eleves(db, body.nb_eleves_par_classe)
+    # Tirage aléatoire (limité aux écoles de la langue du sujet, si précisée)
+    eleve_ids = await _random_eleves(db, body.nb_eleves_par_classe, langue_val)
     for eid in eleve_ids:
         db.add(EvaluationTirage(
             id=uuid.uuid4(),
@@ -184,6 +198,7 @@ async def create_sujet(body: SujetCreate, db: DB, current_user: AdminUser) -> Su
         id=str(sujet.id),
         titre=sujet.titre,
         description=sujet.description,
+        langue=sujet.langue,
         nb_eleves_par_classe=sujet.nb_eleves_par_classe,
         session_id=str(sujet.session_id) if sujet.session_id else None,
         nb_tirages=len(eleve_ids),
@@ -237,12 +252,78 @@ async def get_sujet(sujet_id: uuid.UUID, db: DB, _: AdminUser) -> SujetDetail:
         id=str(sujet.id),
         titre=sujet.titre,
         description=sujet.description,
+        langue=sujet.langue,
         nb_eleves_par_classe=sujet.nb_eleves_par_classe,
         session_id=str(sujet.session_id) if sujet.session_id else None,
         nb_tirages=len(tirages),
         nb_evalues=nb_evalues,
         created_at=sujet.created_at.isoformat(),
         tirages=tirage_items,
+    )
+
+
+@router.post("/{sujet_id}/retirage", response_model=SujetOut)
+async def retirage_sujet(sujet_id: uuid.UUID, db: DB, _: AdminUser) -> SujetOut:
+    """
+    Complète le tirage d'un sujet avec les élèves importés APRÈS sa création.
+
+    Ne touche pas aux tirages existants (évaluations préservées) : pour chaque
+    paire (école, classe) qui n'a encore AUCUN tirage sur ce sujet, tire
+    nb_eleves_par_classe élèves (restreint à la langue du sujet si définie).
+    """
+    sujet = (await db.execute(
+        select(EvaluationSujet).where(EvaluationSujet.id == sujet_id)
+    )).scalar_one_or_none()
+    if sujet is None:
+        raise HTTPException(status_code=404, detail="Sujet introuvable.")
+
+    # Paires (école, classe) déjà couvertes par un tirage existant
+    existing = (await db.execute(
+        select(Eleve.school_id, Eleve.classe)
+        .join(EvaluationTirage, EvaluationTirage.eleve_id == Eleve.id)
+        .where(EvaluationTirage.sujet_id == sujet.id)
+        .distinct()
+    )).all()
+    covered = {(r[0], r[1]) for r in existing}
+
+    # Tirage complet possible, puis on ne garde que les élèves des paires non couvertes
+    candidate_ids = await _random_eleves(db, sujet.nb_eleves_par_classe, sujet.langue)
+    now = datetime.now(timezone.utc)
+    added = 0
+    for eid in candidate_ids:
+        eleve = (await db.execute(select(Eleve).where(Eleve.id == eid))).scalar_one_or_none()
+        if eleve is None or (eleve.school_id, eleve.classe) in covered:
+            continue
+        db.add(EvaluationTirage(
+            id=uuid.uuid4(),
+            sujet_id=sujet.id,
+            eleve_id=eid,
+            created_at=now,
+            updated_at=now,
+        ))
+        added += 1
+    await db.commit()
+
+    nb_tirages = (await db.execute(
+        select(func.count()).where(EvaluationTirage.sujet_id == sujet.id)
+    )).scalar_one() or 0
+    nb_evalues = (await db.execute(
+        select(func.count()).where(
+            EvaluationTirage.sujet_id == sujet.id,
+            EvaluationTirage.resultat.isnot(None),
+        )
+    )).scalar_one() or 0
+
+    return SujetOut(
+        id=str(sujet.id),
+        titre=sujet.titre,
+        description=sujet.description,
+        langue=sujet.langue,
+        nb_eleves_par_classe=sujet.nb_eleves_par_classe,
+        session_id=str(sujet.session_id) if sujet.session_id else None,
+        nb_tirages=nb_tirages,
+        nb_evalues=nb_evalues,
+        created_at=sujet.created_at.isoformat(),
     )
 
 

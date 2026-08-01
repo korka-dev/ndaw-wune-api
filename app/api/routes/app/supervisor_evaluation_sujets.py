@@ -48,6 +48,7 @@ class SujetAppOut(BaseModel):
     id: str
     titre: str
     description: Optional[str] = None
+    langue: Optional[str] = None
     nb_eleves_par_classe: int
     created_at: str
     eleves: list[TirageAppOut] = []
@@ -124,10 +125,16 @@ async def list_evaluation_sujets(
     if not school_classe_pairs:
         return []
 
-    # Récupère tous les sujets
-    sujets = (await db.execute(
-        select(EvaluationSujet).order_by(EvaluationSujet.created_at.desc())
-    )).scalars().all()
+    # Langue d'enseignement de l'école du superviseur : seuls les sujets de
+    # cette langue (ou sans langue = toutes) lui sont proposés.
+    langue_ecole: str | None = current_user.school.langue if current_user.school else None
+
+    sujets_query = select(EvaluationSujet).order_by(EvaluationSujet.created_at.desc())
+    if langue_ecole:
+        sujets_query = sujets_query.where(
+            (EvaluationSujet.langue.is_(None)) | (EvaluationSujet.langue == langue_ecole)
+        )
+    sujets = (await db.execute(sujets_query)).scalars().all()
 
     if not sujets:
         return []
@@ -169,6 +176,7 @@ async def list_evaluation_sujets(
                 id=str(sujet.id),
                 titre=sujet.titre,
                 description=sujet.description,
+                langue=sujet.langue,
                 nb_eleves_par_classe=sujet.nb_eleves_par_classe,
                 created_at=sujet.created_at.isoformat(),
                 eleves=sorted(eleves_app, key=lambda x: x.eleve_classe + x.eleve_nom),

@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.document import Document
 from app.models.eleve import Eleve
+from app.models.evaluation_eleve import EvaluationEleve
 from app.models.planning import PlanningSegment
 from app.models.rapport_difficulte import RapportDifficulte
 from app.models.rapport_libelle import RapportLibelle
@@ -27,6 +29,7 @@ from app.schemas.sync import (
     SyncRapportQuestion,
     SyncSchool,
     SyncSession,
+    SyncStats,
 )
 
 
@@ -158,6 +161,32 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         db, user.school_id, active.id if active else None
     )
 
+    # ── Stats du profil : élèves, tests (évaluations sur ses élèves), fiches ──
+    nb_tests = 0
+    if eleves_items:
+        nb_tests = (
+            await db.execute(
+                select(func.count(EvaluationEleve.id)).where(
+                    EvaluationEleve.eleve_id.in_([e.id for e in eleves_items])
+                )
+            )
+        ).scalar_one()
+
+    langue_ecole = school_data.langue if school_data else None
+    nb_fiches = (
+        await db.execute(
+            select(func.count(Document.id)).where(
+                or_(Document.langue.is_(None), Document.langue == langue_ecole)
+            )
+        )
+    ).scalar_one()
+
+    stats = SyncStats(
+        nb_eleves=len(eleves_items),
+        nb_tests=nb_tests,
+        nb_fiches=nb_fiches,
+    )
+
     return SyncPayload(
         synced_at=datetime.now(timezone.utc),
         profile=profile,
@@ -170,4 +199,5 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         rapport_libelles=rapport_libelles,
         nb_semaines=nb_semaines,
         nb_jours=nb_jours,
+        stats=stats,
     )
