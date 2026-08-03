@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.core.deps import DB, TeacherUser
+from app.core.redis import invalidate_sync_caches
 from app.models.audit_log import AuditLog
 from app.models.eleve import Eleve
 from app.models.eleve_remplacement import EleveRemplacement
@@ -89,5 +90,12 @@ async def create_remplacement(
     ))
 
     await db.commit()
+
+    # Le payload de /app/sync est mis en cache Redis pendant une heure : sans
+    # cette invalidation, le tuteur continuait de recevoir son ancienne liste
+    # d'élèves — l'élève remplacé toujours présent, le nouveau absent — et le
+    # remplacement semblait n'avoir jamais été enregistré.
+    await invalidate_sync_caches()
+
     await db.refresh(remplacement)
     return remplacement
