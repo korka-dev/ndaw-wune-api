@@ -10,7 +10,7 @@ Accessible uniquement aux utilisateurs avec le rôle 'superviseur'.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter
@@ -21,7 +21,7 @@ from app.core.deps import DB, SuperviseurUser
 from app.models.evaluation_competence import EvaluationCompetence
 from app.models.rapport_libelle import RapportLibelle
 from app.models.rapport_question import RapportQuestion
-from app.models.seance import RapportProf
+from app.models.rapport_journalier import RapportJournalier
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
 from app.schemas.sync import SyncRapportQuestion
@@ -124,17 +124,27 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
     assigned_teachers: list[AssignedTeacher] = []
     teacher_uuids = await get_supervised_teacher_ids(db, current_user)
 
-    # Récupérer la date du dernier rapport pour chaque enseignant en un seul query
-    last_rapport_map: dict[uuid.UUID, datetime] = {}
+    # Date du dernier RAPPORT JOURNALIER de chaque enseignant, en une requête.
+    #
+    # C'est bien `rapports_journalier` qu'il faut interroger, et non
+    # `rapports_prof` : ce dernier ne contient que les comptes rendus de fin de
+    # séance (flux minuteur), que beaucoup d'enseignants ne produisent jamais
+    # selon leur `app_access`. Le superviseur voyait donc « Aucun rapport
+    # soumis » en face de tuteurs parfaitement à jour de leurs rapports.
+    #
+    # On retient `date_rapport` (le jour de classe concerné) plutôt que
+    # `created_at` : un rapport rédigé hors-ligne et transmis deux jours plus
+    # tard doit compter pour le jour où la classe a eu lieu.
+    last_rapport_map: dict[uuid.UUID, date] = {}
     if teacher_uuids:
         last_rapports = (
             await db.execute(
                 select(
-                    RapportProf.teacher_id,
-                    func.max(RapportProf.created_at).label("last_date"),
+                    RapportJournalier.teacher_id,
+                    func.max(RapportJournalier.date_rapport).label("last_date"),
                 )
-                .where(RapportProf.teacher_id.in_(teacher_uuids))
-                .group_by(RapportProf.teacher_id)
+                .where(RapportJournalier.teacher_id.in_(teacher_uuids))
+                .group_by(RapportJournalier.teacher_id)
             )
         ).all()
         for row in last_rapports:
