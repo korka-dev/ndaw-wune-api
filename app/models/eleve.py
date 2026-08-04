@@ -26,6 +26,14 @@ class Eleve(Base, UUIDMixin, TimestampMixin):
     date_naissance:  Mapped[Optional[str]] = mapped_column(String(10),  nullable=True)  # ISO YYYY-MM-DD
     statut:          Mapped[str]           = mapped_column(String(20),  nullable=False, default="actif", server_default="actif")
 
+    # ── Base NWV 2026 (RCT) — Titulaire/Remplaçant + groupes de méthode ────────
+    # Ne pas confondre avec User.groupe_recherche (Traitement/Contrôle minuteur,
+    # côté enseignant) : ici c'est l'assignation par élève de la méthode de
+    # lecture et de maths.
+    statut_selection: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    groupe_lecture:   Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    groupe_maths:     Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
     school_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("schools.id", ondelete="CASCADE"),

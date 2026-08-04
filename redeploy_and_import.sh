@@ -11,6 +11,9 @@
 #        ./redeploy_and_import.sh --import-remplacement ~/ListeDesELevesPricipauxRemplacement.xlsx
 #    • Redéployer + Importer langues des écoles + groupes Traitement/Contrôle :
 #        ./redeploy_and_import.sh --import-langues-groupes ~/Langues.xlsx ~/Assignation_Traitement_Simple_NWV2026.xlsx
+#    • Redéployer + Importer groupes RCT (lecture/maths) + statut de sélection
+#      (upsert par code_eleve, jamais de suppression) :
+#        ./redeploy_and_import.sh --import-groupes-rct ~/BaseNWVFinale2026.xlsx
 # ==============================================================================
 
 set -euo pipefail
@@ -32,6 +35,7 @@ EXCEL_FILE=""
 REMPLACEMENT_FILE=""
 LANGUES_FILE=""
 ASSIGNATION_FILE=""
+GROUPES_RCT_FILE=""
 
 # ── Parsing des arguments ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -57,6 +61,11 @@ while [[ $# -gt 0 ]]; do
       LANGUES_FILE="$2"
       ASSIGNATION_FILE="$3"
       shift 3
+      ;;
+    --import-groupes-rct)
+      if [[ -z "${2:-}" ]]; then error "Argument manquant pour --import-groupes-rct"; fi
+      GROUPES_RCT_FILE="$2"
+      shift 2
       ;;
     *)
       error "Argument inconnu : $1\nUsage : $0 [--import fichier.xlsx] [--import-remplacement fichier.xlsx] [--import-langues-groupes <Langues.xlsx> <Assignation.xlsx>]"
@@ -181,13 +190,29 @@ if [[ -n "$LANGUES_FILE" ]]; then
   run_import_2files "$LANGUES_FILE" "$ASSIGNATION_FILE" "scripts/import_langues_et_groupes_2026.py" "langues + groupes"
 fi
 
-if [[ -z "$EXCEL_FILE" && -z "$REMPLACEMENT_FILE" && -z "$LANGUES_FILE" ]]; then
+if [[ -n "$GROUPES_RCT_FILE" ]]; then
+  header "Étape 3 — Import Groupes RCT (lecture/maths) + statut de sélection"
+  [[ -f "$GROUPES_RCT_FILE" ]] || error "Fichier introuvable sur le VPS : $GROUPES_RCT_FILE"
+  BASENAME=$(basename "$GROUPES_RCT_FILE")
+  CONTAINER_PATH="/tmp/${BASENAME}"
+  log "Copie de ${BASENAME} dans le conteneur..."
+  docker cp "$GROUPES_RCT_FILE" "${CONTAINER_ID}:${CONTAINER_PATH}"
+  log "Vérification à blanc (dry-run)..."
+  docker compose exec -T backend python3 scripts/import_groupes_rct_2026.py "$CONTAINER_PATH"
+  log "Application réelle..."
+  docker compose exec -T backend python3 scripts/import_groupes_rct_2026.py "$CONTAINER_PATH" --apply
+  docker compose exec -T backend rm -f "$CONTAINER_PATH"
+  success "Import groupes RCT terminé !"
+fi
+
+if [[ -z "$EXCEL_FILE" && -z "$REMPLACEMENT_FILE" && -z "$LANGUES_FILE" && -z "$GROUPES_RCT_FILE" ]]; then
   echo ""
   success "Déploiement terminé — aucun import demandé."
   echo -e "\n💡 ${YELLOW}Options d'import disponibles :${NC}"
   echo -e "   ${CYAN}./redeploy_and_import.sh --import <fichier.xlsx>${NC}                  → import_eleves.py"
   echo -e "   ${CYAN}./redeploy_and_import.sh --import-remplacement <fichier.xlsx>${NC}     → import_remplacement.py"
   echo -e "   ${CYAN}./redeploy_and_import.sh --import-langues-groupes <Langues.xlsx> <Assignation.xlsx>${NC}  → import_langues_et_groupes_2026.py"
+  echo -e "   ${CYAN}./redeploy_and_import.sh --import-groupes-rct <fichier.xlsx>${NC}      → import_groupes_rct_2026.py"
   echo ""
   exit 0
 fi
