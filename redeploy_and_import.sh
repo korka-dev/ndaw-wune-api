@@ -14,6 +14,9 @@
 #    • Redéployer + Importer groupes RCT (lecture/maths) + statut de sélection
 #      (upsert par code_eleve, jamais de suppression) :
 #        ./redeploy_and_import.sh --import-groupes-rct ~/BaseNWVFinale2026.xlsx
+#    • Redéployer + Compléter les rattachements tuteur → classe manquants
+#      (ajoute des classes aux tuteurs existants, crée les tuteurs absents) :
+#        ./redeploy_and_import.sh --fix-classes-tuteurs ~/BaseNWVFinale2026.xlsx
 # ==============================================================================
 
 set -euo pipefail
@@ -36,6 +39,7 @@ REMPLACEMENT_FILE=""
 LANGUES_FILE=""
 ASSIGNATION_FILE=""
 GROUPES_RCT_FILE=""
+CLASSES_TUTEURS_FILE=""
 
 # ── Parsing des arguments ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -65,6 +69,11 @@ while [[ $# -gt 0 ]]; do
     --import-groupes-rct)
       if [[ -z "${2:-}" ]]; then error "Argument manquant pour --import-groupes-rct"; fi
       GROUPES_RCT_FILE="$2"
+      shift 2
+      ;;
+    --fix-classes-tuteurs)
+      if [[ -z "${2:-}" ]]; then error "Argument manquant pour --fix-classes-tuteurs"; fi
+      CLASSES_TUTEURS_FILE="$2"
       shift 2
       ;;
     *)
@@ -205,7 +214,22 @@ if [[ -n "$GROUPES_RCT_FILE" ]]; then
   success "Import groupes RCT terminé !"
 fi
 
-if [[ -z "$EXCEL_FILE" && -z "$REMPLACEMENT_FILE" && -z "$LANGUES_FILE" && -z "$GROUPES_RCT_FILE" ]]; then
+if [[ -n "$CLASSES_TUTEURS_FILE" ]]; then
+  header "Étape 3 — Complément rattachement tuteur → classe"
+  [[ -f "$CLASSES_TUTEURS_FILE" ]] || error "Fichier introuvable sur le VPS : $CLASSES_TUTEURS_FILE"
+  BASENAME=$(basename "$CLASSES_TUTEURS_FILE")
+  CONTAINER_PATH="/tmp/${BASENAME}"
+  log "Copie de ${BASENAME} dans le conteneur..."
+  docker cp "$CLASSES_TUTEURS_FILE" "${CONTAINER_ID}:${CONTAINER_PATH}"
+  log "Vérification à blanc (dry-run)..."
+  docker compose exec -T backend python3 scripts/fix_classes_tuteurs_2026.py "$CONTAINER_PATH"
+  log "Application réelle..."
+  docker compose exec -T backend python3 scripts/fix_classes_tuteurs_2026.py "$CONTAINER_PATH" --apply
+  docker compose exec -T backend rm -f "$CONTAINER_PATH"
+  success "Complément rattachement tuteur → classe terminé !"
+fi
+
+if [[ -z "$EXCEL_FILE" && -z "$REMPLACEMENT_FILE" && -z "$LANGUES_FILE" && -z "$GROUPES_RCT_FILE" && -z "$CLASSES_TUTEURS_FILE" ]]; then
   echo ""
   success "Déploiement terminé — aucun import demandé."
   echo -e "\n💡 ${YELLOW}Options d'import disponibles :${NC}"
@@ -213,6 +237,7 @@ if [[ -z "$EXCEL_FILE" && -z "$REMPLACEMENT_FILE" && -z "$LANGUES_FILE" && -z "$
   echo -e "   ${CYAN}./redeploy_and_import.sh --import-remplacement <fichier.xlsx>${NC}     → import_remplacement.py"
   echo -e "   ${CYAN}./redeploy_and_import.sh --import-langues-groupes <Langues.xlsx> <Assignation.xlsx>${NC}  → import_langues_et_groupes_2026.py"
   echo -e "   ${CYAN}./redeploy_and_import.sh --import-groupes-rct <fichier.xlsx>${NC}      → import_groupes_rct_2026.py"
+  echo -e "   ${CYAN}./redeploy_and_import.sh --fix-classes-tuteurs <fichier.xlsx>${NC}     → fix_classes_tuteurs_2026.py"
   echo ""
   exit 0
 fi
