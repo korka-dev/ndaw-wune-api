@@ -47,6 +47,7 @@ import asyncio
 from sqlalchemy import text
 
 from app.core.database import AsyncSessionLocal
+from app.core.redis import invalidate_sync_caches
 
 DRY_RUN = "--apply" not in sys.argv
 FILE_ARG = next((a for a in sys.argv[1:] if not a.startswith("--")), None)
@@ -240,6 +241,7 @@ async def run(xlsx_path: str):
         if not DRY_RUN:
             await s.commit()
             print("   Commit effectué ✓")
+            await invalidate_sync_caches()
         else:
             print("   [DRY-RUN] Aucune écriture effectuée")
 
