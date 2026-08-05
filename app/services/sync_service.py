@@ -20,6 +20,7 @@ from app.models.school import School
 from app.models.session import ProgramSession, SessionStatus, TeacherSession
 from app.models.user import User
 from app.services.progression_service import get_config_for
+from app.services.school_service import get_matching_school_ids
 from app.schemas.sync import (
     SyncEleve,
     SyncPayload,
@@ -104,18 +105,24 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
 
     # ── Élèves liés à l'enseignant ────────────────────────────────────────────
     eleves_items: list[SyncEleve] = []
-    if user.school_id and user.classes:
+    if user.school_id and user.classes and user.school:
         # Comparaison normalisée (espaces/casse) pour éviter qu'un écart de
         # saisie entre la classe de l'enseignant et celle des élèves importés
         # (ex. "CM1 A" vs "cm1a") ne fasse disparaître les élèves de la sync.
         normalized_classes = [
             " ".join(c.strip().split()).lower() for c in user.classes if c and c.strip()
         ]
+        # Les imports ont créé des fiches école dupliquées pour un même
+        # établissement (« EE BATTAL » / « EFA BATTAL ») : un enseignant peut
+        # être rattaché à l'une pendant que ses élèves sont répartis sur les
+        # deux. On élargit donc la recherche à toutes les fiches de même nom
+        # normalisé, comme pour le périmètre superviseur.
+        school_ids = await get_matching_school_ids(db, user.school)
         rows = (
             await db.execute(
                 select(Eleve)
                 .where(
-                    Eleve.school_id == user.school_id,
+                    Eleve.school_id.in_(school_ids),
                     func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")).in_(normalized_classes),
                     Eleve.statut == "actif",
                 )

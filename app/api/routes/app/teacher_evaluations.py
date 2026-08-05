@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import DB, TeacherUser
@@ -24,6 +24,7 @@ from app.models.eleve import Eleve
 from app.models.evaluation_eleve import EvaluationEleve
 from app.models.evaluation_tirage import EvaluationTirage
 from app.models.user import User
+from app.services.school_service import get_matching_school_ids
 
 router = APIRouter(prefix="/teacher", tags=["App — Enseignant"])
 
@@ -73,14 +74,21 @@ async def teacher_evaluations(
       3. Charger leurs évaluations (toutes dates, tous superviseurs).
       4. Joindre les noms des élèves et des superviseurs pour l'affichage.
     """
-    if not current_user.school_id or not current_user.classes:
+    if not current_user.school_id or not current_user.classes or not current_user.school:
         return TeacherEvaluationsPayload(evaluations=[], total=0)
 
     # 1. Élèves des classes de l'enseignant
+    # Comparaison de classe normalisée (espaces/casse) et écoles élargies aux
+    # doublons de fiche (« EE BATTAL » / « EFA BATTAL ») — même logique que
+    # /app/sync, pour ne pas faire disparaître d'élèves des évaluations.
+    normalized_classes = [
+        " ".join(c.strip().split()).lower() for c in current_user.classes if c and c.strip()
+    ]
+    school_ids = await get_matching_school_ids(db, current_user.school)
     eleves_result = await db.execute(
         select(Eleve).where(
-            Eleve.school_id == current_user.school_id,
-            Eleve.classe.in_(current_user.classes),
+            Eleve.school_id.in_(school_ids),
+            func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")).in_(normalized_classes),
             Eleve.statut == "actif",
         )
     )

@@ -20,6 +20,7 @@ from app.models.eleve import Eleve
 from app.models.evaluation_eleve import EvaluationEleve
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
+from app.services.school_service import get_matching_school_ids
 from app.services.supervisor_service import get_supervised_teacher_ids, is_supervised_teacher
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
@@ -102,13 +103,18 @@ async def supervisor_eleves(current_user: SuperviseurUser, db: DB) -> ElevesPayl
     for teacher in teachers:
         classes_meta: list[ClasseMeta] = []
 
-        if teacher.school_id and teacher.classes:
+        if teacher.school_id and teacher.classes and teacher.school:
+            # Écoles élargies aux doublons de fiche (« EE BATTAL » / « EFA
+            # BATTAL ») — sinon le comptage ignore silencieusement la moitié
+            # des élèves d'un enseignant rattaché à la « mauvaise » fiche.
+            school_ids = await get_matching_school_ids(db, teacher.school)
             for cls in teacher.classes:
+                cls_norm = " ".join(cls.strip().split()).lower()
                 # Un seul COUNT par classe — très léger
                 count_result = await db.execute(
                     select(func.count()).where(
-                        Eleve.school_id == teacher.school_id,
-                        Eleve.classe == cls,
+                        Eleve.school_id.in_(school_ids),
+                        func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")) == cls_norm,
                         Eleve.statut == "actif",
                     )
                 )
@@ -147,14 +153,16 @@ async def get_classe_eleves(
 
     teacher_result = await db.execute(select(User).where(User.id == tid))
     teacher = teacher_result.scalar_one_or_none()
-    if not teacher or not teacher.school_id:
+    if not teacher or not teacher.school_id or not teacher.school:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enseignant introuvable.")
 
+    school_ids = await get_matching_school_ids(db, teacher.school)
+    classe_norm = " ".join(classe.strip().split()).lower()
     eleve_result = await db.execute(
         select(Eleve)
         .where(
-            Eleve.school_id == teacher.school_id,
-            Eleve.classe == classe,
+            Eleve.school_id.in_(school_ids),
+            func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")) == classe_norm,
             Eleve.statut == "actif",
         )
         .order_by(Eleve.nom)

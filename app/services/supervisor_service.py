@@ -15,16 +15,16 @@ que le suivi fonctionne pour tout le monde sans intervention manuelle.
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.langue import canonical_langue, strip_accents
+from app.core.langue import canonical_langue
 from app.models.school import School
 from app.models.user import User, UserRole, UserStatus
+from app.services.school_service import get_matching_school_ids
 
 logger = logging.getLogger(__name__)
 
@@ -37,30 +37,6 @@ def _parse_assigned_ids(supervisor: User) -> list[uuid.UUID]:
         except (ValueError, AttributeError, TypeError):
             continue
     return ids
-
-
-_SCHOOL_PREFIXES = ("EE ", "EFA ", "ECOLE ELEMENTAIRE ", "ECOLE ")
-
-
-def _normalize_school_name(name: str) -> str:
-    """Nom d'école comparable : majuscules, espaces normalisés, préfixe retiré.
-    Même règle que le script d'exploitation link_superviseurs_teachers.py."""
-    s = re.sub(r"\s+", " ", strip_accents(name).upper().strip())
-    for prefix in _SCHOOL_PREFIXES:
-        if s.startswith(prefix):
-            return s[len(prefix):]
-    return s
-
-
-async def _same_name_school_ids(db: AsyncSession, school: School) -> list[uuid.UUID]:
-    """IDs des écoles portant le même nom normalisé — couvre les doublons créés
-    à l'import (« EE Ndiaganiao » et « Ndiaganiao »), sur lesquels superviseur
-    et enseignants peuvent être rattachés séparément."""
-    target = _normalize_school_name(school.name or "")
-    if not target:
-        return [school.id]
-    rows = (await db.execute(select(School.id, School.name))).all()
-    return [sid for sid, name in rows if _normalize_school_name(name or "") == target]
 
 
 async def get_supervised_teacher_ids(db: AsyncSession, supervisor: User) -> list[uuid.UUID]:
@@ -82,7 +58,7 @@ async def get_supervised_teacher_ids(db: AsyncSession, supervisor: User) -> list
         )
         return []
 
-    school_ids = await _same_name_school_ids(db, supervisor.school)
+    school_ids = await get_matching_school_ids(db, supervisor.school)
     rows = (
         await db.execute(
             select(User.id).where(
