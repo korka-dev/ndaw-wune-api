@@ -8,13 +8,14 @@ from pydantic import BaseModel, field_validator
 
 
 class EleveRemplacementCreate(BaseModel):
-    ancien_eleve_id:   Optional[uuid.UUID] = None
-    ancien_eleve_nom:  Optional[str]       = None
-    nouveau_eleve_nom: str
-    classe:            str
-    motif:             str
+    """Remplacement d'un titulaire par un remplaçant déjà recensé dans la
+    même classe (Base NWV 2026 / RCT) — plus de saisie libre de nom : le
+    tuteur choisit dans la liste des remplaçants disponibles."""
+    ancien_eleve_id:  uuid.UUID
+    nouveau_eleve_id: uuid.UUID
+    motif:            str = "Remplacement saisi par le tuteur"
 
-    @field_validator("nouveau_eleve_nom", "classe", "motif")
+    @field_validator("motif")
     @classmethod
     def not_empty(cls, v: str) -> str:
         v = (v or "").strip()

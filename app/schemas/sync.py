@@ -71,6 +71,7 @@ class SyncEleve(BaseModel):
     nom:    str
     prenom: Optional[str]
     classe: str
+    statut_selection: Optional[str] = None   # "Titulaire" | "Remplaçant" | None (Base NWV 2026 / RCT)
 
     model_config = {"from_attributes": True}
 
@@ -109,6 +110,10 @@ class SyncPayload(BaseModel):
     active_session:   Optional[SyncSession]
     planning:         List[SyncPlanningSegment]
     eleves:           List[SyncEleve] = []
+    # Élèves "Remplaçant" (Base NWV 2026 / RCT) des classes du tuteur — pas
+    # affichés dans les listes courantes, seulement comme réservoir pour le
+    # bouton « Remplacer un élève » (RemplacementSheet côté app).
+    remplacants:      List[SyncEleve] = []
     rapport_questions:  List[SyncRapportQuestion]  = []
     rapport_difficultes: List[SyncRapportDifficulte] = []
     rapport_libelles:   dict[str, str] = {}

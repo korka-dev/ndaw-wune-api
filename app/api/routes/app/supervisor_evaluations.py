@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.core.deps import DB, SuperviseurUser
+from app.core.eleve_filters import EST_TITULAIRE
 from app.models.eleve import Eleve
 from app.models.evaluation_eleve import EvaluationEleve
 from app.models.session import ProgramSession, SessionStatus
@@ -116,6 +117,7 @@ async def supervisor_eleves(current_user: SuperviseurUser, db: DB) -> ElevesPayl
                         Eleve.school_id.in_(school_ids),
                         func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")) == cls_norm,
                         Eleve.statut == "actif",
+                        EST_TITULAIRE,
                     )
                 )
                 nb = count_result.scalar() or 0
@@ -164,6 +166,7 @@ async def get_classe_eleves(
             Eleve.school_id.in_(school_ids),
             func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")) == classe_norm,
             Eleve.statut == "actif",
+            EST_TITULAIRE,
         )
         .order_by(Eleve.nom)
     )

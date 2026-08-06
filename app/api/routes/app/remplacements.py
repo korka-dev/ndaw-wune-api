@@ -3,18 +3,18 @@
 Route :
   POST /app/remplacements
 
-Effet immédiat : le nouvel élève est créé actif dans la classe du tuteur,
-l'ancien élève (s'il est identifié) passe en statut "inactif". L'action est
-aussi journalisée dans l'historique des modifications (audit log) afin de
-remonter sur le dashboard admin, puisque cette route n'est pas sous /admin/
-(seul préfixe surveillé automatiquement par le middleware d'audit).
+Le tuteur choisit un titulaire de sa classe et un remplaçant déjà recensé
+dans la même classe (Base NWV 2026 / RCT) — plus de saisie libre de nom.
+Effet immédiat : le titulaire sortant passe en statut "inactif", le
+remplaçant est promu "Titulaire" (il apparaît désormais dans les listes du
+tuteur). L'action est aussi journalisée dans l'historique des modifications
+(audit log) afin de remonter sur le dashboard admin, puisque cette route
+n'est pas sous /admin/ (seul préfixe surveillé automatiquement par le
+middleware d'audit).
 """
 from __future__ import annotations
 
-import uuid
-
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
 
 from app.core.deps import DB, TeacherUser
 from app.core.redis import invalidate_sync_caches
@@ -26,55 +26,54 @@ from app.schemas.eleve_remplacement import EleveRemplacementCreate, EleveRemplac
 router = APIRouter(prefix="/remplacements", tags=["App — Remplacement élève"])
 
 
-def _split_nom_prenom(full_name: str) -> tuple[str, str | None]:
-    parts = full_name.strip().split()
-    if len(parts) == 1:
-        return parts[0], None
-    return parts[-1], " ".join(parts[:-1])
+def _nom_complet(e: Eleve) -> str:
+    return f"{e.prenom} {e.nom}".strip() if e.prenom else e.nom
 
 
 @router.post("", response_model=EleveRemplacementResponse, status_code=201)
 async def create_remplacement(
     body: EleveRemplacementCreate, current_user: TeacherUser, db: DB
 ) -> EleveRemplacementResponse:
-    ancien: Eleve | None = None
-    if body.ancien_eleve_id is not None:
-        ancien = (
-            await db.execute(select(Eleve).where(Eleve.id == body.ancien_eleve_id))
-        ).scalar_one_or_none()
-        if ancien is None:
-            raise HTTPException(status_code=404, detail="Élève à remplacer introuvable.")
-        if ancien.school_id != current_user.school_id:
-            raise HTTPException(status_code=403, detail="Cet élève n'appartient pas à votre école.")
-        ancien.statut = "inactif"
+    ancien = await db.get(Eleve, body.ancien_eleve_id)
+    if ancien is None:
+        raise HTTPException(status_code=404, detail="Élève à remplacer introuvable.")
+    if ancien.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="Cet élève n'appartient pas à votre école.")
+    if (ancien.statut_selection or "").strip().lower() == "remplaçant":
+        raise HTTPException(status_code=400, detail="Seul un titulaire peut être remplacé.")
 
-    classe = ancien.classe if ancien else body.classe
-    nom, prenom = _split_nom_prenom(body.nouveau_eleve_nom)
+    nouveau = await db.get(Eleve, body.nouveau_eleve_id)
+    if nouveau is None:
+        raise HTTPException(status_code=404, detail="Remplaçant introuvable.")
+    if (
+        nouveau.school_id != current_user.school_id
+        or nouveau.classe != ancien.classe
+        or nouveau.statut != "actif"
+        or (nouveau.statut_selection or "").strip().lower() != "remplaçant"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Ce remplaçant n'est plus disponible pour cette classe. Synchronisez et réessayez.",
+        )
 
-    nouveau = Eleve(
-        id=uuid.uuid4(),
-        nom=nom,
-        prenom=prenom,
-        classe=classe,
-        statut="actif",
-        school_id=current_user.school_id,
-    )
-    db.add(nouveau)
-    await db.flush()
+    ancien_nom = _nom_complet(ancien)
+    nouveau_nom = _nom_complet(nouveau)
+
+    ancien.statut = "inactif"
+    nouveau.statut_selection = "Titulaire"
 
     remplacement = EleveRemplacement(
-        ancien_eleve_id=ancien.id if ancien else None,
-        ancien_eleve_nom=body.ancien_eleve_nom or (ancien.nom if ancien else None),
+        ancien_eleve_id=ancien.id,
+        ancien_eleve_nom=ancien_nom,
         nouveau_eleve_id=nouveau.id,
-        nouveau_eleve_nom=body.nouveau_eleve_nom.strip(),
+        nouveau_eleve_nom=nouveau_nom,
         motif=body.motif.strip(),
         teacher_id=current_user.id,
         school_id=current_user.school_id,
-        classe=classe,
+        classe=ancien.classe,
     )
     db.add(remplacement)
 
-    ancien_label = remplacement.ancien_eleve_nom or "élève inconnu"
     db.add(AuditLog(
         user_id=current_user.id,
         user_name=current_user.name,
@@ -84,8 +83,8 @@ async def create_remplacement(
         method="POST",
         path="/api/v1/app/remplacements",
         description=(
-            f"Remplacement — {ancien_label} → {body.nouveau_eleve_nom.strip()} "
-            f"(classe {classe}) — motif : {body.motif.strip()}"
+            f"Remplacement — {ancien_nom} → {nouveau_nom} "
+            f"(classe {ancien.classe}) — motif : {body.motif.strip()}"
         ),
     ))
 

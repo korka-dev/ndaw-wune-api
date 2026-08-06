@@ -12,6 +12,7 @@ from sqlalchemy import select, func
 from app.core.deps import AdminUser, DB
 from app.core.export_utils import build_xlsx_response
 from app.core.pagination import Page, Pagination
+from app.models.eleve import Eleve
 from app.models.school_classe import SchoolClasse
 from app.models.school import School
 from app.schemas.school_classe import SchoolClasseCreate, SchoolClasseResponse, SchoolClasseUpdate
@@ -29,6 +30,39 @@ async def _get_or_404(db, classe_id: uuid.UUID) -> SchoolClasse:
     if obj is None:
         raise HTTPException(status_code=404, detail="Classe introuvable.")
     return obj
+
+
+async def _live_effectifs(db, classes: list[SchoolClasse]) -> dict[uuid.UUID, int]:
+    """Effectif réel = COUNT(*) d'élèves actifs correspondant à cette fiche
+    classe, calculé à la volée — plutôt que SchoolClasse.effectif, une valeur
+    figée une seule fois à l'import (`len(lignes du fichier Excel)`, voir
+    scripts/import_eleves.py) qui dérive silencieusement de la vraie liste
+    d'élèves au fil des corrections et des imports de remplacement."""
+    if not classes:
+        return {}
+    school_ids = {c.school_id for c in classes}
+    rows = (
+        await db.execute(
+            select(
+                Eleve.school_id,
+                func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")),
+                func.count(),
+            )
+            .where(Eleve.school_id.in_(school_ids), Eleve.statut == "actif")
+            .group_by(Eleve.school_id, func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")))
+        )
+    ).all()
+    counts: dict[tuple[uuid.UUID, str], int] = {(sid, classe_norm): n for sid, classe_norm, n in rows}
+    return {
+        c.id: counts.get((c.school_id, " ".join(c.name.strip().split()).lower()), 0)
+        for c in classes
+    }
+
+
+def _with_live_effectif(obj: SchoolClasse, live: dict[uuid.UUID, int]) -> SchoolClasseResponse:
+    resp = SchoolClasseResponse.model_validate(obj)
+    resp.effectif = live.get(obj.id, 0)
+    return resp
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -49,7 +83,9 @@ async def list_classes(
 
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
     items = (await db.execute(q.offset(page.skip).limit(page.limit))).scalars().all()
-    return Page(total=total, skip=page.skip, limit=page.limit, items=items)
+    live = await _live_effectifs(db, items)
+    response_items = [_with_live_effectif(c, live) for c in items]
+    return Page(total=total, skip=page.skip, limit=page.limit, items=response_items)
 
 
 @router.post("", response_model=SchoolClasseResponse, status_code=status.HTTP_201_CREATED)
@@ -76,7 +112,8 @@ async def create_classe(body: SchoolClasseCreate, db: DB, _: AdminUser) -> Schoo
     db.add(obj)
     await db.flush()
     await db.refresh(obj, attribute_names=["school"])
-    return obj
+    live = await _live_effectifs(db, [obj])
+    return _with_live_effectif(obj, live)
 
 
 @router.post("/reimport")
@@ -209,7 +246,9 @@ async def reimport_classes_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
 
 @router.get("/{classe_id}", response_model=SchoolClasseResponse)
 async def get_classe(classe_id: uuid.UUID, db: DB, _: AdminUser) -> SchoolClasseResponse:
-    return await _get_or_404(db, classe_id)
+    obj = await _get_or_404(db, classe_id)
+    live = await _live_effectifs(db, [obj])
+    return _with_live_effectif(obj, live)
 
 
 @router.patch("/{classe_id}", response_model=SchoolClasseResponse)
@@ -241,7 +280,8 @@ async def update_classe(
 
     await db.flush()
     await db.refresh(obj, attribute_names=["school"])
-    return obj
+    live = await _live_effectifs(db, [obj])
+    return _with_live_effectif(obj, live)
 
 
 @router.delete("/{classe_id}", status_code=status.HTTP_204_NO_CONTENT)

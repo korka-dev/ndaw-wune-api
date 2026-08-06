@@ -104,7 +104,11 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         planning_items = [SyncPlanningSegment.model_validate(s) for s in segments]
 
     # ── Élèves liés à l'enseignant ────────────────────────────────────────────
+    # Séparés en deux : le tuteur ne voit/rapporte que sur les titulaires
+    # (Base NWV 2026 / RCT) ; les remplaçants ne sont exposés que comme
+    # réservoir pour le bouton « Remplacer un élève » (RemplacementSheet).
     eleves_items: list[SyncEleve] = []
+    remplacants_items: list[SyncEleve] = []
     if user.school_id and user.classes and user.school:
         # Comparaison normalisée (espaces/casse) pour éviter qu'un écart de
         # saisie entre la classe de l'enseignant et celle des élèves importés
@@ -129,7 +133,10 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
                 .order_by(Eleve.classe, Eleve.nom, Eleve.prenom)
             )
         ).scalars().all()
-        eleves_items = [SyncEleve.model_validate(e) for e in rows]
+        for e in rows:
+            item = SyncEleve.model_validate(e)
+            statut = (e.statut_selection or "").strip().lower()
+            (remplacants_items if statut == "remplaçant" else eleves_items).append(item)
 
     # ── Questions complémentaires du rapport journalier (configurées par l'admin) ──
     # Ne renvoie que les questions destinées au tuteur (ou à "tous").
@@ -201,6 +208,7 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
         active_session=active_session,
         planning=planning_items,
         eleves=eleves_items,
+        remplacants=remplacants_items,
         rapport_questions=rapport_questions_items,
         rapport_difficultes=rapport_difficultes_items,
         rapport_libelles=rapport_libelles,
