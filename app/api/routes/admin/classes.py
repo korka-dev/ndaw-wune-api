@@ -41,15 +41,16 @@ async def _live_effectifs(db, classes: list[SchoolClasse]) -> dict[uuid.UUID, in
     if not classes:
         return {}
     school_ids = {c.school_id for c in classes}
+    classe_norm = func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g"))
     rows = (
         await db.execute(
             select(
                 Eleve.school_id,
-                func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")),
+                classe_norm,
                 func.count(),
             )
             .where(Eleve.school_id.in_(school_ids), Eleve.statut == "actif")
-            .group_by(Eleve.school_id, func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")))
+            .group_by(Eleve.school_id, classe_norm)
         )
     ).all()
     counts: dict[tuple[uuid.UUID, str], int] = {(sid, classe_norm): n for sid, classe_norm, n in rows}
