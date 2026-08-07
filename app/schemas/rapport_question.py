@@ -11,6 +11,7 @@ class RapportQuestionType(str, Enum):
     texte_court    = "texte_court"
     texte_long     = "texte_long"
     nombre         = "nombre"
+    date           = "date"
     oui_non        = "oui_non"
     choix_unique   = "choix_unique"
     choix_multiple = "choix_multiple"
