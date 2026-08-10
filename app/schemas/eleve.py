@@ -32,16 +32,17 @@ class EleveUpdate(BaseModel):
 
 
 class EleveResponse(BaseModel):
-    id:             uuid.UUID
-    nom:            str
-    prenom:         Optional[str]
-    classe:         str
-    genre:          Optional[str]       = None
-    date_naissance: Optional[str]       = None
-    statut:         str                 = "actif"
-    school_id:      Optional[uuid.UUID]
-    session_id:     Optional[uuid.UUID]
-    school_name:    Optional[str]       = None  # nom de l'école (joint)
-    school_region:  Optional[str]       = None  # IEF / région (joint)
+    id:                uuid.UUID
+    nom:               str
+    prenom:            Optional[str]
+    classe:            str
+    genre:             Optional[str]       = None
+    date_naissance:    Optional[str]       = None
+    statut:            str                 = "actif"
+    statut_selection:  Optional[str]       = None  # Titulaire | Remplaçant (Base NWV 2026)
+    school_id:         Optional[uuid.UUID]
+    session_id:        Optional[uuid.UUID]
+    school_name:       Optional[str]       = None  # nom de l'école (joint)
+    school_region:     Optional[str]       = None  # IEF / région (joint)
 
     model_config = {"from_attributes": True}

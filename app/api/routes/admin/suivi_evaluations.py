@@ -5,7 +5,7 @@ Permet de consulter les évaluations d'élèves soumises par les superviseurs de
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter
@@ -42,23 +42,61 @@ class EvaluationItem(BaseModel):
 
 
 class SuperviseurOption(BaseModel):
-    id:   str
-    name: str
+    id:                  str
+    name:                str
+    school_name:         Optional[str] = None
+    total:               int           = 0   # évaluations toutes sessions confondues
+    evaluations_semaine: int           = 0   # évaluations depuis lundi (semaine en cours)
+    last_eval_date:      Optional[date] = None
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.get("/superviseurs", response_model=list[SuperviseurOption])
 async def list_evaluateurs(db: DB, _: AdminUser) -> list[SuperviseurOption]:
-    """Liste des superviseurs ayant au moins une évaluation enregistrée (pour le filtre)."""
-    rows = (await db.execute(
-        select(User.id, User.name)
-        .join(EvaluationEleve, EvaluationEleve.superviseur_id == User.id)
+    """
+    Liste de TOUS les superviseurs (pas seulement ceux ayant déjà évalué), avec
+    leur total d'évaluations et leur activité de la semaine en cours — pour
+    repérer d'un coup d'œil qui n'a pas fait sa supervision cette semaine.
+    """
+    superviseurs = (await db.execute(
+        select(User)
+        .options(selectinload(User.school))
         .where(User.role == UserRole.superviseur)
-        .group_by(User.id, User.name)
         .order_by(User.name)
+    )).scalars().all()
+
+    # Totaux + dernière date, groupés par superviseur (1 requête)
+    totals = (await db.execute(
+        select(
+            EvaluationEleve.superviseur_id,
+            func.count().label("total"),
+            func.max(EvaluationEleve.date_eval).label("last_date"),
+        ).group_by(EvaluationEleve.superviseur_id)
     )).all()
-    return [SuperviseurOption(id=str(r.id), name=r.name) for r in rows]
+    totals_map = {r.superviseur_id: (r.total, r.last_date) for r in totals}
+
+    # Évaluations depuis lundi de la semaine en cours (1 requête)
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    week_counts = (await db.execute(
+        select(EvaluationEleve.superviseur_id, func.count().label("total"))
+        .where(EvaluationEleve.date_eval >= week_start)
+        .group_by(EvaluationEleve.superviseur_id)
+    )).all()
+    week_map = {r.superviseur_id: r.total for r in week_counts}
+
+    return [
+        SuperviseurOption(
+            id=str(sup.id),
+            name=sup.name,
+            school_name=sup.school.name if sup.school else None,
+            total=totals_map.get(sup.id, (0, None))[0],
+            evaluations_semaine=week_map.get(sup.id, 0),
+            last_eval_date=totals_map.get(sup.id, (0, None))[1],
+        )
+        for sup in superviseurs
+    ]
 
 
 @router.get("", response_model=Page[EvaluationItem])

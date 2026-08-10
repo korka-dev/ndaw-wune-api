@@ -17,6 +17,8 @@ class RapportQuestion(Base, UUIDMixin, TimestampMixin):
 
     label:    Mapped[str]              = mapped_column(String(500), nullable=False)
     # texte_court | texte_long | nombre | date | oui_non | choix_unique | choix_multiple
+    # | selection_eleve | selection_tuteur (sélection dans la liste réelle de
+    # l'app — élèves du tuteur, ou tuteurs supervisés côté superviseur)
     type:     Mapped[str]              = mapped_column(String(30), nullable=False)
     options:  Mapped[Optional[list[str]]] = mapped_column(ARRAY(String), nullable=True)
     required: Mapped[bool]             = mapped_column(Boolean, default=False, nullable=False)

@@ -4,16 +4,20 @@ Statistiques de présence des enseignants supervisés.
 """
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 from app.core.deps import AdminUser, DB
+from app.core.export_utils import sanitize_cell
 from app.models.rapport_journalier import RapportJournalier
 from app.models.seance import RapportProf, Seance, SeanceStatus
 from app.models.user import User, UserRole
@@ -178,10 +182,8 @@ async def _teacher_presence(
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
-@router.get("", response_model=list[SuperviseurSuiviItem])
-async def list_suivi_superviseurs(
-    db:         DB,
-    _:          AdminUser,
+async def _build_suivi_superviseurs(
+    db,
     session_id: Optional[uuid.UUID] = None,
     search:     Optional[str]       = None,
 ) -> list[SuperviseurSuiviItem]:
@@ -264,6 +266,47 @@ async def list_suivi_superviseurs(
         ))
 
     return result
+
+
+@router.get("", response_model=list[SuperviseurSuiviItem])
+async def list_suivi_superviseurs(
+    db:         DB,
+    _:          AdminUser,
+    session_id: Optional[uuid.UUID] = None,
+    search:     Optional[str]       = None,
+) -> list[SuperviseurSuiviItem]:
+    return await _build_suivi_superviseurs(db, session_id=session_id, search=search)
+
+
+@router.get("/export/csv")
+async def export_suivi_superviseurs_csv(
+    db:         DB,
+    _:          AdminUser,
+    session_id: Optional[uuid.UUID] = None,
+    search:     Optional[str]       = None,
+) -> StreamingResponse:
+    """Export CSV du suivi des superviseurs (compteurs de présence de leurs enseignants)."""
+    items = await _build_suivi_superviseurs(db, session_id=session_id, search=search)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Superviseur", "École", "Assignés", "Présents", "En cours", "Absents", "Tuteurs en alerte"])
+    for it in items:
+        writer.writerow([sanitize_cell(v) for v in (
+            it.name,
+            it.school_name or "",
+            it.total_assignes,
+            it.presents,
+            it.en_cours,
+            it.absents,
+            ", ".join(t.name for t in it.tuteurs_en_alerte),
+        )])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=suivi_superviseurs.csv"},
+    )
 
 
 @router.get("/{superviseur_id}", response_model=SuperviseurDetail)

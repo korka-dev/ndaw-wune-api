@@ -7,9 +7,10 @@ et consultées par l'admin depuis le tableau de bord.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,6 +37,10 @@ class Remarque(Base, UUIDMixin, TimestampMixin):
 
     # nouveau | traite
     statut: Mapped[str] = mapped_column(String(20), default="nouveau", server_default="nouveau", nullable=False, index=True)
+
+    # ── Réponse admin — consultable par l'auteur depuis l'app mobile ───────────
+    reponse_admin:    Mapped[Optional[str]]      = mapped_column(Text, nullable=True)
+    reponse_admin_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[Optional["User"]] = relationship("User", foreign_keys=[user_id])
 

@@ -2,11 +2,12 @@
 
 Routes :
   GET   /admin/remarques           → liste paginée (filtres catégorie/statut)
-  PATCH /admin/remarques/{id}      → changer le statut (nouveau/traite)
+  PATCH /admin/remarques/{id}      → changer le statut et/ou répondre à l'auteur
 """
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -21,19 +22,22 @@ router = APIRouter(prefix="/remarques", tags=["Admin — Remarques"])
 
 
 class RemarqueAdminOut(BaseModel):
-    id:         str
-    user_id:    Optional[str] = None
-    user_name:  str
-    user_role:  str
-    ecole:      Optional[str] = None
-    categorie:  str
-    message:    str
-    statut:     str
-    created_at: str
+    id:                str
+    user_id:           Optional[str] = None
+    user_name:         str
+    user_role:         str
+    ecole:             Optional[str] = None
+    categorie:         str
+    message:           str
+    statut:            str
+    reponse_admin:     Optional[str] = None
+    reponse_admin_at:  Optional[str] = None
+    created_at:        str
 
 
 class RemarqueStatusIn(BaseModel):
-    statut: str  # nouveau | traite
+    statut:        Optional[str] = None  # nouveau | traite
+    reponse_admin: Optional[str] = None  # réponse envoyée à l'auteur de la remarque
 
 
 def _to_out(r: Remarque) -> RemarqueAdminOut:
@@ -46,6 +50,8 @@ def _to_out(r: Remarque) -> RemarqueAdminOut:
         categorie=r.categorie,
         message=r.message,
         statut=r.statut,
+        reponse_admin=r.reponse_admin,
+        reponse_admin_at=r.reponse_admin_at.isoformat() if r.reponse_admin_at else None,
         created_at=r.created_at.isoformat(),
     )
 
@@ -73,13 +79,13 @@ async def list_remarques(
 
 
 @router.patch("/{remarque_id}", response_model=RemarqueAdminOut)
-async def update_remarque_status(
+async def update_remarque(
     remarque_id: uuid.UUID,
     body: RemarqueStatusIn,
     db: DB,
     _: AdminUser,
 ) -> RemarqueAdminOut:
-    if body.statut not in ("nouveau", "traite"):
+    if body.statut is not None and body.statut not in ("nouveau", "traite"):
         raise HTTPException(status_code=422, detail="Statut invalide : 'nouveau' ou 'traite'.")
 
     remarque = (await db.execute(
@@ -88,7 +94,17 @@ async def update_remarque_status(
     if remarque is None:
         raise HTTPException(status_code=404, detail="Remarque introuvable.")
 
-    remarque.statut = body.statut
+    if body.reponse_admin is not None:
+        texte = body.reponse_admin.strip()
+        remarque.reponse_admin = texte or None
+        remarque.reponse_admin_at = datetime.now(timezone.utc) if texte else None
+        # Une réponse envoyée marque la remarque comme traitée, sauf statut explicite fourni
+        if body.statut is None and texte:
+            remarque.statut = "traite"
+
+    if body.statut is not None:
+        remarque.statut = body.statut
+
     await db.commit()
     await db.refresh(remarque)
     return _to_out(remarque)

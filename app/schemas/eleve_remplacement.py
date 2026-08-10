@@ -32,7 +32,10 @@ class EleveRemplacementResponse(BaseModel):
     nouveau_eleve_nom:  str
     motif:              str
     teacher_id:         uuid.UUID
+    teacher_name:       Optional[str]       = None  # nom du tuteur (joint)
     school_id:          Optional[uuid.UUID]
+    school_name:        Optional[str]       = None  # nom de l'école (joint)
+    school_commune:     Optional[str]       = None  # commune de l'école (joint)
     classe:             str
     date_remplacement:  date
 

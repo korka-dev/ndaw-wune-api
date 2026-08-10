@@ -6,16 +6,29 @@ Routes :
 """
 from __future__ import annotations
 
+import csv
+import io
 from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
+from app.core.export_utils import sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.usage_log import UsageLog
+
+FEATURE_LABELS: dict[str, str] = {
+    "accueil": "Accueil", "planning": "Planning", "timer": "Timer",
+    "rapports": "Rapports", "rapport_journalier": "Rapport journalier",
+    "ressources": "Ressources", "evaluations": "Évaluations",
+    "presences": "Présences", "difficultes": "Difficultés",
+    "remarques": "Remarques", "profil": "Profil",
+}
+ROLE_LABELS: dict[str, str] = {"enseignant": "Tuteur", "superviseur": "Superviseur"}
 
 router = APIRouter(prefix="/usage-logs", tags=["Admin — Logs d'utilisation"])
 
@@ -100,6 +113,46 @@ async def list_usage_logs(
         for r in rows
     ]
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
+
+
+@router.get("/export/csv")
+async def export_usage_logs_csv(
+    db: DB,
+    _: AdminUser,
+    feature: Optional[str] = None,
+    user_role: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> StreamingResponse:
+    """Export CSV des événements d'usage (mêmes filtres que la liste)."""
+    d_from = _parse_date(date_from, "date_from")
+    d_to   = _parse_date(date_to,   "date_to")
+
+    base = select(UsageLog).order_by(UsageLog.created_at.desc())
+    base = _date_filters(base, d_from, d_to)
+    if feature:
+        base = base.where(UsageLog.feature == feature)
+    if user_role:
+        base = base.where(UsageLog.user_role == user_role)
+
+    rows = (await db.execute(base)).scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Utilisateur", "Rôle", "Fonctionnalité", "Date"])
+    for r in rows:
+        writer.writerow([sanitize_cell(v) for v in (
+            r.user_name,
+            ROLE_LABELS.get(r.user_role, r.user_role),
+            FEATURE_LABELS.get(r.feature, r.feature),
+            r.created_at.isoformat(),
+        )])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=logs_utilisation.csv"},
+    )
 
 
 @router.get("/stats", response_model=UsageStatsOut)

@@ -8,13 +8,19 @@ from pydantic import BaseModel, field_validator
 
 
 class RapportQuestionType(str, Enum):
-    texte_court    = "texte_court"
-    texte_long     = "texte_long"
-    nombre         = "nombre"
-    date           = "date"
-    oui_non        = "oui_non"
-    choix_unique   = "choix_unique"
-    choix_multiple = "choix_multiple"
+    texte_court      = "texte_court"
+    texte_long       = "texte_long"
+    nombre           = "nombre"
+    date             = "date"
+    oui_non          = "oui_non"
+    choix_unique     = "choix_unique"
+    choix_multiple   = "choix_multiple"
+    # Sélection dans la liste réelle de l'app mobile (pas d'options à saisir
+    # ici : la liste est résolue côté app au moment de répondre) —
+    # selection_eleve : élèves du tuteur qui répond · selection_tuteur :
+    # tuteurs supervisés par le superviseur qui répond.
+    selection_eleve  = "selection_eleve"
+    selection_tuteur = "selection_tuteur"
 
 
 class RapportQuestionCible(str, Enum):

@@ -265,6 +265,7 @@ async def list_eleves(
             genre=e.genre,
             date_naissance=e.date_naissance,
             statut=e.statut,
+            statut_selection=e.statut_selection,
             school_id=e.school_id,
             session_id=e.session_id,
             school_name=e.school.name if e.school else None,
@@ -405,6 +406,7 @@ async def export_eleves_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None)
         ("naiss",   "Date de naissance", 18),
         ("classe",  "Classe",            10),
         ("statut",  "Statut",            10),
+        ("type",    "Type",              14),
     ]
     rows = [
         [
@@ -414,6 +416,7 @@ async def export_eleves_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None)
             e.date_naissance or "",
             e.classe,
             e.statut,
+            e.statut_selection or "",
         ]
         for e in items
     ]
