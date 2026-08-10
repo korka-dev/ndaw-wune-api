@@ -12,6 +12,7 @@ from app.api.routes.admin import (
     remarques as admin_remarques,
     rapport_difficulte_resolutions, progression_configs,
     eleve_remplacements as admin_eleve_remplacements,
+    import_export as admin_import_export,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -65,6 +66,7 @@ api_router.include_router(admin_remarques.router,            prefix="/admin")  #
 api_router.include_router(rapport_difficulte_resolutions.router, prefix="/admin")  # PATCH /admin/rapport-difficulte-resolutions/{id}/resolve
 api_router.include_router(progression_configs.router,        prefix="/admin")  # /admin/progression-configs
 api_router.include_router(admin_eleve_remplacements.router,  prefix="/admin")  # GET /admin/remplacements
+api_router.include_router(admin_import_export.router,         prefix="/admin")  # GET /admin/import-export/export · POST /admin/import-export/import
 
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")
