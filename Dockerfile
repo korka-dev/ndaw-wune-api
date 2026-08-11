@@ -42,6 +42,8 @@ CMD ["sh", "-c", \
      gunicorn app.main:app \
        --worker-class uvicorn.workers.UvicornWorker \
        --workers ${GUNICORN_WORKERS:-9} \
+       --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
+       --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
        --bind 0.0.0.0:8000 \
        --timeout 120 \
        --access-logfile - \
