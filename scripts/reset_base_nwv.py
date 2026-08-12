@@ -331,9 +331,25 @@ def take_dump(dump_dir, container):
 
     if not ok:
         out.unlink(missing_ok=True)
-        sys.exit(f"❌  Dump impossible : {err}\n"
-                 f"   RIEN n'a été supprimé. Prenez un dump manuellement puis "
-                 f"relancez avec --no-dump.")
+        # Cas courant sur le VPS : le script tourne dans le conteneur backend,
+        # dont l'image n'embarque ni pg_dump (Dockerfile : libpq-dev seulement)
+        # ni la CLI docker. Le dump doit alors être pris depuis l'hôte.
+        dans_conteneur = os.path.exists("/.dockerenv")
+        msg = [f"❌  Dump impossible : {err}", "   RIEN n'a été supprimé."]
+        if dans_conteneur:
+            msg += [
+                "",
+                "   Ce script tourne dans un conteneur, qui n'a pas pg_dump.",
+                "   Prenez le dump depuis l'HÔTE, puis relancez avec --no-dump :",
+                "",
+                "     cd ~/ndaw-wune && set -a && . ./.env && set +a && mkdir -p backups \\",
+                "       && docker compose exec -T -e PGPASSWORD=\"$POSTGRES_PASSWORD\" db \\",
+                f"          pg_dump -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -Fc \\",
+                "          > backups/avant-reset-$(date +%Y%m%d-%H%M%S).dump",
+            ]
+        else:
+            msg.append("   Prenez un dump manuellement puis relancez avec --no-dump.")
+        sys.exit("\n".join(msg))
     taille = out.stat().st_size
     if taille < 1024:
         out.unlink(missing_ok=True)
