@@ -51,6 +51,10 @@ Options
                                retient celui dont l'école correspond au fichier
                                et qui a un téléphone. Sans cette option, le
                                script s'arrête et affiche les candidats.
+    --garder-compte UUID       Force la fiche à conserver quand le départage
+                               automatique est impossible (deux fiches également
+                               plausibles). Répétable. L'autre fiche est
+                               supprimée comme compte hors fichier.
     --creer-comptes-manquants  Crée SANS TÉLÉPHONE les acteurs du fichier qui
                                n'ont pas de compte. ⚠️  Un compte sans téléphone
                                NE PEUT PAS SE CONNECTER (le téléphone est
@@ -398,10 +402,21 @@ async def run(args):
                 ec = src["ecoles"].get(info["code_ecole"], {})
                 ecole_attendue[(role, norm_name(info["name"]))] = ec.get("name", "?")
 
+        forces = {u.lower() for u in args.garder_compte}
+
         def choisir(role, key, candidats):
             """Retient le compte le plus plausible : école conforme au fichier
-            (+2), téléphone renseigné (+1), à égalité le plus ancien."""
+            (+2), téléphone renseigné (+1), à égalité le plus ancien.
+
+            --garder-compte <uuid> force le choix et court-circuite le score :
+            c'est la seule issue quand deux fiches sont également plausibles
+            (même école, deux téléphones valides), car seul un humain sait
+            lequel des deux numéros la personne utilise réellement.
+            """
             attendue = ecole_attendue.get((role, key))
+            impose = [r for r in candidats if str(r["id"]).lower() in forces]
+            if len(impose) == 1:
+                return impose[0], attendue
             def score(r):
                 return ((2 if r["ecole"] == attendue else 0)
                         + (1 if r["phone"] else 0))
@@ -432,18 +447,27 @@ async def run(args):
         if ambigus:
             print("\n❌  COMPTES AMBIGUS — plusieurs comptes portent le même nom une fois "
                   "accents et espaces neutralisés :")
+            indecidables = []
             for role, key, candidats, attendue, gagnant in ambigus:
                 print(f"\n      [{role}] {key} — le fichier l'attend à « {attendue} »")
                 for c in candidats:
                     tel = c["phone"] or "SANS TÉLÉPHONE (ne peut pas se connecter)"
                     marque = "  ← correspond" if c["ecole"] == attendue else ""
                     retenu = "  ← SERAIT RETENU" if gagnant and c["id"] == gagnant["id"] else ""
-                    print(f"        « {c['name']} » · {tel} · {c['ecole']} "
-                          f"· {c['classes']}{marque}{retenu}")
+                    print(f"        id={c['id']}")
+                    print(f"          « {c['name']} » · {tel} · {c['ecole']}{marque}{retenu}")
                 if gagnant is None:
-                    print("        → départage impossible : mêmes école et téléphone.")
-            print("\n   → Relancez avec --resoudre-doublons pour retenir automatiquement")
-            print("     le compte marqué, ou corrigez les fiches dans le dashboard.")
+                    indecidables.append((role, key))
+                    print("        → départage automatique impossible : les deux fiches sont")
+                    print("          également plausibles. Seul un humain sait lequel des")
+                    print("          numéros la personne utilise pour se connecter.")
+            if indecidables and args.resoudre_doublons:
+                print("\n   → Choisissez explicitement la fiche à garder :")
+                print("        --garder-compte <id>        (répétable)")
+                print("     L'autre sera supprimée comme compte hors fichier.")
+            else:
+                print("\n   → Relancez avec --resoudre-doublons pour retenir automatiquement")
+                print("     le compte marqué, ou corrigez les fiches dans le dashboard.")
             return
 
         # ── 2. Acteurs du fichier sans compte ─────────────────────────────────
@@ -709,6 +733,9 @@ if __name__ == "__main__":
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--confirm-purge", default="")
     ap.add_argument("--resoudre-doublons", action="store_true")
+    ap.add_argument("--garder-compte", action="append", default=[], metavar="UUID",
+                    help="Force la fiche à conserver quand plusieurs comptes portent "
+                         "le même nom. Répétable.")
     ap.add_argument("--creer-comptes-manquants", action="store_true")
     ap.add_argument("--conserver-comptes-hors-fichier", action="store_true")
     ap.add_argument("--dump-dir", default=str(ROOT.parent / "backups"))
