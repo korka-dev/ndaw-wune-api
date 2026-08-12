@@ -84,6 +84,33 @@ class UserUpdate(BaseModel):
         return _normalize_sn_phone(v)
 
 
+# ── Réinitialisation de mot de passe (admin) ──────────────────────────────────
+
+class SetPasswordRequest(BaseModel):
+    """Définit un NOUVEAU mot de passe pour un compte, depuis le dashboard admin.
+
+    Il ne s'agit pas de « récupérer » le mot de passe existant : les mots de
+    passe sont hachés (bcrypt, à sens unique — voir app/core/security.py) et ne
+    sont récupérables sous aucune forme, ici comme ailleurs dans l'application.
+    L'admin choisit une nouvelle valeur, communiquée ensuite au tuteur ou au
+    superviseur (par oral, par SMS…).
+    """
+    new_password: str
+    # Si True, l'utilisateur devra en choisir un autre à sa prochaine connexion
+    # (même mécanisme qu'un compte nouvellement créé). Si False (défaut), le
+    # mot de passe défini ici fonctionne directement — utile quand l'admin le
+    # communique en personne et veut être sûr qu'il marche du premier coup.
+    force_change: bool = False
+
+    @field_validator("new_password")
+    @classmethod
+    def min_length(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 6:
+            raise ValueError("Le mot de passe doit contenir au moins 6 caractères.")
+        return v
+
+
 # ── Réponse ───────────────────────────────────────────────────────────────────
 
 class SchoolBrief(BaseModel):

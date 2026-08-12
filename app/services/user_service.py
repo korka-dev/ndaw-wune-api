@@ -213,6 +213,30 @@ async def change_password(
     await db.flush()
 
 
+async def admin_reset_password(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    new_password: str,
+    force_change: bool = False,
+) -> User:
+    """
+    Définit un nouveau mot de passe pour un compte, depuis le dashboard admin
+    (page « Identifiants tuteurs/superviseurs »).
+
+    Invalide immédiatement tous les tokens déjà émis, sur tous les appareils —
+    même mécanisme que change_password() : si le motif de la réinitialisation
+    est un téléphone perdu ou volé, une session déjà ouverte ne doit pas
+    survivre au changement.
+    """
+    user = await get_by_id(db, user_id)
+    user.password_hash        = hash_password(new_password)
+    user.must_change_password = force_change
+    user.tokens_valid_from     = datetime.now(timezone.utc).replace(microsecond=0)
+    await db.flush()
+    await db.refresh(user, attribute_names=["school"])
+    return user
+
+
 async def toggle_status(db: AsyncSession, user_id: uuid.UUID) -> User:
     user = await get_by_id(db, user_id)
     user.status = UserStatus.inactif if user.status == UserStatus.actif else UserStatus.actif

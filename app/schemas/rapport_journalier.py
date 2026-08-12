@@ -29,6 +29,43 @@ class RapportJournalierCreate(BaseModel):
     reponses_questions:       Optional[str]    = None   # JSON sérialisé {question_id: réponse}
 
 
+class RapportJournalierAdminListItem(BaseModel):
+    """Ligne de liste pour le dashboard admin — SANS les photos.
+
+    Les photos sont stockées en base sous forme de data URI base64 : un seul
+    rapport pèse couramment 1 à 3 Mo. Les renvoyer dans la liste faisait
+    transiter plusieurs dizaines de Mo par page de 20. On expose seulement leur
+    nombre ; les images se récupèrent une par une via
+    GET /admin/rapports/journalier/{id}/photo/{index}.
+    """
+    id:                       uuid.UUID
+    teacher_id:               uuid.UUID
+    date_rapport:             date
+    ief:                      str
+    commune:                  str
+    ecole:                    str
+    superviseur:              str
+    nom_tuteur:               str
+    nb_absences:              int
+    absents:                  Optional[str]
+    semaine:                  int
+    jour_cours:               int
+    difficultes:              str
+    autres_difficultes:       Optional[str]
+    description_difficultes:  Optional[str]
+    directeur_venu:           bool
+    besoin_appui:             bool
+    domaines_appui:           Optional[str]
+    has_observations:         bool
+    commentaires:             Optional[str]
+    soumis_en_offline:        bool
+    reponses_questions:       Optional[str] = None
+    nb_photos:                int = 0
+    created_at:               datetime
+
+    model_config = {"from_attributes": True}
+
+
 class RapportJournalierResponse(BaseModel):
     id:                       uuid.UUID
     teacher_id:               uuid.UUID

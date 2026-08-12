@@ -4,18 +4,31 @@ Export : un classeur Excel, une ligne par élève, reprenant toute la hiérarchi
 (IEF → école → superviseur → tuteur → classe → élève), sur le même principe
 que le fichier de référence BaseNWVFinale2026.
 
-Import : réimporte ce même format. Comportement volontairement NON destructif
-et NON invasif — chaque ligne est comparée à l'existant par une clé stable
-(code_ecole pour les écoles, code_eleve pour les élèves, nom exact pour les
-enseignants/superviseurs) : si l'enregistrement existe déjà, il est ignoré tel
-quel ; seuls les enregistrements absents de la base sont créés. Rien n'est
-jamais modifié ni supprimé — cf. la demande explicite « ajouter les nouvelles
-données et ignorer celles qui existent déjà ».
+Import : réimporte ce même format. Comportement volontairement NON destructif —
+chaque ligne est comparée à l'existant par une clé stable, et seuls les
+enregistrements absents sont créés. Rien n'est jamais supprimé. Réimporter un
+export intact ne crée donc rien : l'opération est idempotente.
+
+Clés de correspondance
+    École                : code_ecole, repli sur le nom
+    Élève                : code_eleve, repli sur (école, classe, nom, prénom)
+    Tuteur / superviseur : (école, nom) — insensible à la casse, aux accents et
+                           aux espaces multiples. La paire inclut l'école parce
+                           que deux personnes différentes peuvent porter le même
+                           nom dans deux écoles différentes.
+
+La seule mise à jour autorisée sur une fiche existante
+    Ajouter une classe manquante à users.classes d'un tuteur. Sans elle, un
+    élève ajouté dans une classe que le tuteur n'a pas encore serait bien créé
+    en base mais resterait INVISIBLE dans l'app mobile : le rattachement
+    élève → tuteur se fait sur (school_id, classe), et la classe manquerait du
+    tableau (cf. CLAUDE.md §2). Les données ajoutées ne serviraient à rien.
 """
 from __future__ import annotations
 
 import io
 import secrets
+import unicodedata
 import uuid as uuid_module
 from typing import Optional
 
@@ -137,8 +150,9 @@ class ImportSummary(BaseModel):
     superviseurs_crees: int = 0
     tuteurs_crees:      int = 0
     classes_creees:     int = 0
+    classes_ajoutees_tuteurs: int = 0  # classes ajoutées à un tuteur existant
     eleves_crees:       int = 0
-    ignores:            int = 0  # lignes/entités déjà existantes, laissées telles quelles
+    ignores:            int = 0  # lignes dont l'élève existait déjà
     erreurs:            list[str] = []
 
 
@@ -147,6 +161,22 @@ def _s(v) -> Optional[str]:
         return None
     v = str(v).strip()
     return v or None
+
+
+def _nkey(v) -> str:
+    """Clé de correspondance d'un nom de personne : insensible à la casse, aux
+    accents et aux espaces multiples.
+
+    Les noms saisis à la main dans un fichier réimporté ne portent pas toujours
+    les accents du dashboard (« SATOU SENE » pour « SATOU SÉNE »), et certaines
+    fiches ont un double espace (« MODOU  FALL »). Sans cette neutralisation, un
+    nom déjà connu est vu comme nouveau et un compte en double est créé.
+    """
+    if v is None:
+        return ""
+    s = unicodedata.normalize("NFD", str(v))
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return " ".join(s.split()).upper()
 
 
 def _unique_placeholder_phone(taken: set[str]) -> str:
@@ -193,10 +223,49 @@ async def import_all(db: DB, _: AdminUser, file: UploadFile = File(...)) -> Impo
     schools_by_name = {s.name.strip().upper(): s for s in schools_db}
 
     users_db = (await db.execute(select(User))).scalars().all()
-    users_by_name_role: dict[tuple[str, UserRole], User] = {
-        (u.name.strip().upper(), u.role): u for u in users_db
-    }
+    # Deux personnes différentes peuvent porter le même nom dans deux écoles
+    # différentes (c'est le cas en base pour AISSATA NDIAYE). La clé de
+    # correspondance est donc (école, nom, rôle) ; on retombe sur les comptes
+    # sans école, puis on crée.
+    users_by_school: dict[tuple[Optional[uuid_module.UUID], str, UserRole], User] = {}
+    users_sans_ecole: dict[tuple[str, UserRole], User] = {}
+    for u in users_db:
+        users_by_school[(u.school_id, _nkey(u.name), u.role)] = u
+        if u.school_id is None:
+            users_sans_ecole[(_nkey(u.name), u.role)] = u
     taken_phones = {u.phone for u in users_db if u.phone}
+
+    def trouver_compte(school_id, nom: str, role: UserRole) -> Optional[User]:
+        u = users_by_school.get((school_id, _nkey(nom), role))
+        if u is not None:
+            return u
+        u = users_sans_ecole.get((_nkey(nom), role))
+        if u is not None:            # compte orphelin : on le rattache à l'école
+            u.school_id = school_id
+            users_by_school[(school_id, _nkey(nom), role)] = u
+            users_sans_ecole.pop((_nkey(nom), role), None)
+        return u
+
+    def enregistrer_compte(u: User) -> None:
+        users_by_school[(u.school_id, _nkey(u.name), u.role)] = u
+
+    def ajouter_classe(tut: User, classe: str, niveau: Optional[str]) -> bool:
+        """Complète users.classes / users.niveau d'un enseignant.
+
+        Sans cela, un élève ajouté dans une classe que le tuteur n'a pas encore
+        est créé en base mais reste INVISIBLE dans l'app : le rattachement se
+        fait sur (school_id, classe) et la classe manquerait du tableau. C'est
+        la seule mise à jour que l'import s'autorise sur une fiche existante,
+        parce que sans elle les données ajoutées ne servent à rien.
+        """
+        change = False
+        if classe not in (tut.classes or []):
+            tut.classes = sorted([*(tut.classes or []), classe])
+            change = True
+        if niveau and niveau not in (tut.niveau or []):
+            tut.niveau = sorted([*(tut.niveau or []), niveau])
+            change = True
+        return change
 
     classes_db = (await db.execute(select(SchoolClasse))).scalars().all()
     classes_by_key = {(c.school_id, c.name): c for c in classes_db}
@@ -241,15 +310,12 @@ async def import_all(db: DB, _: AdminUser, file: UploadFile = File(...)) -> Impo
                     schools_by_code[code_ecole] = school
                 schools_by_name[ecole_name.upper()] = school
                 summary.ecoles_creees += 1
-            else:
-                summary.ignores += 1
 
-            # 2) Superviseur (créé seulement s'il n'existe pas déjà, par nom)
+            # 2) Superviseur (créé seulement s'il n'existe pas déjà)
             sup_name = _s(get(row, "Superviseur"))
             if sup_name:
-                for one_name in [n.strip() for n in sup_name.split("|")]:
-                    key = (one_name.upper(), UserRole.superviseur)
-                    if key not in users_by_name_role:
+                for one_name in [n.strip() for n in sup_name.split("|") if n.strip()]:
+                    if trouver_compte(school.id, one_name, UserRole.superviseur) is None:
                         phone = _normalize_sn_phone(_s(get(row, "Téléphone Superviseur"))) \
                             or _unique_placeholder_phone(taken_phones)
                         new_sup = User(
@@ -261,18 +327,15 @@ async def import_all(db: DB, _: AdminUser, file: UploadFile = File(...)) -> Impo
                         )
                         db.add(new_sup)
                         await db.flush()
-                        users_by_name_role[key] = new_sup
+                        enregistrer_compte(new_sup)
                         taken_phones.add(phone)
                         summary.superviseurs_crees += 1
-                    else:
-                        summary.ignores += 1
 
             # 3) Tuteur / enseignant
+            niveau = _s(get(row, "Niveau")) or classe.split()[0]
             tut_name = _s(get(row, "Tuteur"))
-            tut = None
             if tut_name:
-                key = (tut_name.upper(), UserRole.enseignant)
-                tut = users_by_name_role.get(key)
+                tut = trouver_compte(school.id, tut_name, UserRole.enseignant)
                 if tut is None:
                     phone = _normalize_sn_phone(_s(get(row, "Téléphone Tuteur"))) \
                         or _unique_placeholder_phone(taken_phones)
@@ -281,28 +344,29 @@ async def import_all(db: DB, _: AdminUser, file: UploadFile = File(...)) -> Impo
                         phone=phone,
                         password_hash=hash_password(secrets.token_urlsafe(12)),
                         role=UserRole.enseignant, school_id=school.id,
-                        classes=[classe],
+                        classes=[classe], niveau=[niveau],
                         must_change_password=True,
                     )
                     db.add(tut)
                     await db.flush()
-                    users_by_name_role[key] = tut
+                    enregistrer_compte(tut)
                     taken_phones.add(phone)
                     summary.tuteurs_crees += 1
-                else:
-                    summary.ignores += 1
+                elif ajouter_classe(tut, classe, niveau):
+                    # Fiche conservée telle quelle, seule la liste des classes
+                    # s'enrichit — sinon les élèves de cette classe seraient
+                    # créés mais invisibles pour leur tuteur.
+                    await db.flush()
+                    summary.classes_ajoutees_tuteurs += 1
 
             # 4) Classe (school_classes)
             class_key = (school.id, classe)
             if class_key not in classes_by_key:
-                niveau = _s(get(row, "Niveau")) or classe.split()[0]
                 new_classe = SchoolClasse(id=uuid_module.uuid4(), school_id=school.id, name=classe, niveau=niveau)
                 db.add(new_classe)
                 await db.flush()
                 classes_by_key[class_key] = new_classe
                 summary.classes_creees += 1
-            else:
-                summary.ignores += 1
 
             # 5) Élève (clé : code_eleve, repli sur identité)
             code_eleve = _s(get(row, "Code Élève"))
@@ -328,6 +392,9 @@ async def import_all(db: DB, _: AdminUser, file: UploadFile = File(...)) -> Impo
                 eleves_by_identity[identity_key] = new_eleve
                 summary.eleves_crees += 1
             else:
+                # Une ligne = un élève : c'est la seule unité de comptage qui
+                # ait un sens pour l'utilisateur. Compter aussi l'école, le
+                # tuteur et la classe donnait ~5 « ignorés » par ligne.
                 summary.ignores += 1
 
         except Exception as exc:  # une ligne en erreur ne doit pas bloquer les autres
