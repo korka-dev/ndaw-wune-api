@@ -41,12 +41,15 @@ Usage — depuis le dossier backend/
 
     python3 scripts/reset_base_nwv.py ~/Downloads/BaseNWVFinale2026VL.xlsx \\
         --resoudre-doublons --creer-comptes-manquants \\
-        --apply --confirm-purge OUI-SUPPRIMER-TOUT
-        Application réelle.
+        --apply --confirm-purge OUI-SUPPRIMER-TOUT --confirm-db ared_ndawune
+        Application réelle. La simulation affiche la commande exacte à recopier.
 
 Options
     --apply                    Applique (sinon simulation + rollback)
     --confirm-purge TOKEN      Exigé avec --apply : OUI-SUPPRIMER-TOUT
+    --confirm-db NOM           Exigé avec --apply : nom exact de la base visée.
+                               Une DATABASE_URL mal transmise retombe sinon en
+                               silence sur la base par défaut — c'est arrivé.
     --resoudre-doublons        Quand plusieurs comptes portent le même nom,
                                retient celui dont l'école correspond au fichier
                                et qui a un téléphone. Sans cette option, le
@@ -559,9 +562,21 @@ async def run(args):
             print("\n" + "=" * 72)
             print("🧪  SIMULATION — rien n'a été écrit.")
             print("    Pour appliquer, ajoutez :")
-            print(f"      --apply --confirm-purge {CONFIRM_TOKEN}")
+            print(f"      --apply --confirm-purge {CONFIRM_TOKEN} --confirm-db {p['dbname']}")
             await s.rollback()
             return
+
+        # ── Garde-fou de cible ────────────────────────────────────────────────
+        # Une variable DATABASE_URL mal transmise (shell, .env non chargé, faute
+        # de frappe) fait silencieusement retomber le script sur la base par
+        # défaut. Exiger le nom de la base en clair rend la cible impossible à
+        # confondre : le token de purge seul ne dit pas SUR QUOI on purge.
+        if args.confirm_db != p["dbname"]:
+            print(f"\n❌  Cible non confirmée. Le script est connecté à « {p['dbname']} ».")
+            print(f"    Ajoutez --confirm-db {p['dbname']} si c'est bien la base à purger.")
+            await s.rollback()
+            sys.exit(1)
+        print(f"\n🎯  Cible confirmée : {p['dbname']}@{p['host']}")
 
         # ── 5. Dump ───────────────────────────────────────────────────────────
         if args.no_dump:
@@ -732,6 +747,9 @@ if __name__ == "__main__":
     ap.add_argument("fichier", help="Chemin vers BaseNWVFinale2026VL.xlsx")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--confirm-purge", default="")
+    ap.add_argument("--confirm-db", default="", metavar="NOM",
+                    help="Nom exact de la base à purger. Exigé avec --apply : "
+                         "protège contre une DATABASE_URL mal transmise.")
     ap.add_argument("--resoudre-doublons", action="store_true")
     ap.add_argument("--garder-compte", action="append", default=[], metavar="UUID",
                     help="Force la fiche à conserver quand plusieurs comptes portent "
