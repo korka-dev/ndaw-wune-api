@@ -24,36 +24,43 @@ router = APIRouter(prefix="/evaluation-docs", tags=["Admin — Dossiers d'évalu
 # ── Schémas ───────────────────────────────────────────────────────────────────
 
 class EvaluationDocIn(BaseModel):
-    langue:     str              = Field(..., max_length=100)
-    titre:      str              = Field(..., max_length=255)
-    lettres:    list[str]        = Field(default_factory=list)
-    syllabes:   list[str]        = Field(default_factory=list)
-    mots:       list[str]        = Field(default_factory=list)
-    operations: list[str]        = Field(default_factory=list)
-    is_active:  bool             = True
+    langue:        str              = Field(..., max_length=100)
+    titre:         str              = Field(..., max_length=255)
+    lettres:       list[str]        = Field(default_factory=list)
+    syllabes:      list[str]        = Field(default_factory=list)
+    mots:          list[str]        = Field(default_factory=list)
+    operations:    list[str]        = Field(default_factory=list)
+    is_active:     bool             = True
+    semaine_debut: Optional[int]    = Field(None, ge=1, le=52)
+    semaine_fin:   Optional[int]    = Field(None, ge=1, le=52)
 
 
 class EvaluationDocPatch(BaseModel):
-    langue:     Optional[str]        = None
-    titre:      Optional[str]        = None
-    lettres:    Optional[list[str]]  = None
-    syllabes:   Optional[list[str]]  = None
-    mots:       Optional[list[str]]  = None
-    operations: Optional[list[str]]  = None
-    is_active:  Optional[bool]       = None
+    langue:        Optional[str]        = None
+    titre:         Optional[str]        = None
+    lettres:       Optional[list[str]]  = None
+    syllabes:      Optional[list[str]]  = None
+    mots:          Optional[list[str]]  = None
+    operations:    Optional[list[str]]  = None
+    is_active:     Optional[bool]       = None
+    semaine_debut: Optional[int]        = Field(None, ge=1, le=52)
+    semaine_fin:   Optional[int]        = Field(None, ge=1, le=52)
+    clear_semaines: Optional[bool]      = None  # remet semaine_debut/fin à NULL (valable toutes semaines)
 
 
 class EvaluationDocOut(BaseModel):
-    id:         str
-    langue:     str
-    titre:      str
-    lettres:    list[str]
-    syllabes:   list[str]
-    mots:       list[str]
-    operations: list[str]
-    is_active:  bool
-    created_at: str
-    updated_at: str
+    id:            str
+    langue:        str
+    titre:         str
+    lettres:       list[str]
+    syllabes:      list[str]
+    mots:          list[str]
+    operations:    list[str]
+    is_active:     bool
+    semaine_debut: Optional[int] = None
+    semaine_fin:   Optional[int] = None
+    created_at:    str
+    updated_at:    str
 
     model_config = {"from_attributes": True}
 
@@ -68,6 +75,8 @@ def _to_out(doc: EvaluationDoc) -> EvaluationDocOut:
         mots=doc.mots or [],
         operations=doc.operations or [],
         is_active=doc.is_active,
+        semaine_debut=doc.semaine_debut,
+        semaine_fin=doc.semaine_fin,
         created_at=doc.created_at.isoformat(),
         updated_at=doc.updated_at.isoformat(),
     )
@@ -93,6 +102,8 @@ async def create_doc(body: EvaluationDocIn, _: AdminUser, db: DB) -> EvaluationD
         mots=body.mots,
         operations=body.operations,
         is_active=body.is_active,
+        semaine_debut=body.semaine_debut,
+        semaine_fin=body.semaine_fin,
     )
     db.add(doc)
     await db.flush()
@@ -109,7 +120,11 @@ async def get_doc(doc_id: str, _: AdminUser, db: DB) -> EvaluationDocOut:
 @router.patch("/{doc_id}", response_model=EvaluationDocOut)
 async def update_doc(doc_id: str, body: EvaluationDocPatch, _: AdminUser, db: DB) -> EvaluationDocOut:
     doc = await _get_or_404(doc_id, db)
-    for field, value in body.model_dump(exclude_none=True).items():
+    data = body.model_dump(exclude_none=True)
+    if data.pop("clear_semaines", False):
+        doc.semaine_debut = None
+        doc.semaine_fin = None
+    for field, value in data.items():
         setattr(doc, field, value)
     await db.flush()
     await db.refresh(doc)

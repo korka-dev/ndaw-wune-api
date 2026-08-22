@@ -66,6 +66,11 @@ class Seance(Base, UUIDMixin, TimestampMixin):
     )
     total_paused_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Vrai si la séance a été clôturée automatiquement (restée "en_cours" plus
+    # de 4h sans timer_stop) plutôt que fermée par l'enseignant — permet à
+    # l'admin de distinguer une séance normale d'une séance non clôturée.
+    auto_closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+
     # Effectif
     nb_eleves_presents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     nb_eleves_total:    Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

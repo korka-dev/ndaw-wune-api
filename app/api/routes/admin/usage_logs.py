@@ -19,7 +19,9 @@ from sqlalchemy import func, select
 from app.core.deps import AdminUser, DB
 from app.core.export_utils import sanitize_cell
 from app.core.pagination import Page, Pagination
+from app.models.seance import Seance
 from app.models.usage_log import UsageLog
+from app.services.seance_service import close_stale_seances
 
 FEATURE_LABELS: dict[str, str] = {
     "accueil": "Accueil", "planning": "Planning", "timer": "Timer",
@@ -27,6 +29,8 @@ FEATURE_LABELS: dict[str, str] = {
     "ressources": "Ressources", "evaluations": "Évaluations",
     "presences": "Présences", "difficultes": "Difficultés",
     "remarques": "Remarques", "profil": "Profil",
+    "timer_start": "Timer — Démarrage", "timer_pause": "Timer — Pause",
+    "timer_resume": "Timer — Reprise", "timer_stop": "Timer — Arrêt",
 }
 ROLE_LABELS: dict[str, str] = {"enseignant": "Tuteur", "superviseur": "Superviseur"}
 
@@ -38,7 +42,11 @@ class UsageLogOut(BaseModel):
     user_id:    Optional[str] = None
     user_name:  str
     user_role:  str
+    user_code:  Optional[str] = None
     feature:    str
+    seance_id:         Optional[str]  = None
+    duration_seconds:  Optional[int]  = None
+    seance_auto_closed: Optional[bool] = None
     created_at: str
 
 
@@ -86,6 +94,10 @@ async def list_usage_logs(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
 ) -> Page[UsageLogOut]:
+    # Cron paresseux : clôture les séances "en_cours" oubliées depuis 4h+
+    # avant d'afficher la liste, pour que les logs timer reflètent l'état réel.
+    await close_stale_seances(db)
+
     d_from = _parse_date(date_from, "date_from")
     d_to   = _parse_date(date_to,   "date_to")
 
@@ -101,13 +113,27 @@ async def list_usage_logs(
     )).scalar_one()
 
     rows = (await db.execute(base.offset(page.skip).limit(page.limit))).scalars().all()
+
+    # Résoudre en 1 requête le statut auto_closed des séances référencées
+    seance_ids = {r.seance_id for r in rows if r.seance_id}
+    auto_closed_map: dict = {}
+    if seance_ids:
+        seance_rows = (await db.execute(
+            select(Seance.id, Seance.auto_closed).where(Seance.id.in_(seance_ids))
+        )).all()
+        auto_closed_map = {row.id: row.auto_closed for row in seance_rows}
+
     items = [
         UsageLogOut(
             id=str(r.id),
             user_id=str(r.user_id) if r.user_id else None,
             user_name=r.user_name,
             user_role=r.user_role,
+            user_code=r.user_code,
             feature=r.feature,
+            seance_id=str(r.seance_id) if r.seance_id else None,
+            duration_seconds=r.duration_seconds,
+            seance_auto_closed=auto_closed_map.get(r.seance_id) if r.seance_id else None,
             created_at=r.created_at.isoformat(),
         )
         for r in rows
@@ -125,6 +151,8 @@ async def export_usage_logs_csv(
     date_to: Optional[str] = None,
 ) -> StreamingResponse:
     """Export CSV des événements d'usage (mêmes filtres que la liste)."""
+    await close_stale_seances(db)
+
     d_from = _parse_date(date_from, "date_from")
     d_to   = _parse_date(date_to,   "date_to")
 
@@ -139,12 +167,15 @@ async def export_usage_logs_csv(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Utilisateur", "Rôle", "Fonctionnalité", "Date"])
+    writer.writerow(["Utilisateur", "Code acteur", "Rôle", "Fonctionnalité", "Séance ID", "Durée (secondes)", "Date"])
     for r in rows:
         writer.writerow([sanitize_cell(v) for v in (
             r.user_name,
+            r.user_code or "",
             ROLE_LABELS.get(r.user_role, r.user_role),
             FEATURE_LABELS.get(r.feature, r.feature),
+            str(r.seance_id) if r.seance_id else "",
+            r.duration_seconds if r.duration_seconds is not None else "",
             r.created_at.isoformat(),
         )])
     output.seek(0)

@@ -1,7 +1,9 @@
 """Modèle EvaluationDoc — dossier d'évaluation par langue (Seereer, Pulaar, Wolof…)."""
 from __future__ import annotations
 
-from sqlalchemy import Boolean, String, Text
+from typing import Optional
+
+from sqlalchemy import Boolean, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,6 +30,12 @@ class EvaluationDoc(Base, UUIDMixin, TimestampMixin):
     operations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Plage de semaines du programme pendant laquelle ce dossier s'applique
+    # (NULL = valable pour toutes les semaines, comportement historique).
+    # Bornes inclusives, cohérentes avec ProgressionConfig.nb_semaines.
+    semaine_debut: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    semaine_fin:   Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     def __repr__(self) -> str:
         return f"<EvaluationDoc langue={self.langue} titre={self.titre!r}>"

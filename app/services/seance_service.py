@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from fastapi import HTTPException, status
@@ -16,6 +17,40 @@ from app.models.seance import RapportProf, Seance, SeanceStatus
 from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceStart, SeanceMissedReport, RapportCreate
 
 logger = logging.getLogger(__name__)
+
+# Une séance restée "en_cours" plus longtemps que ça sans timer_stop est
+# considérée comme oubliée par l'enseignant (app fermée, batterie morte…)
+# et clôturée automatiquement.
+AUTO_CLOSE_AFTER = timedelta(hours=4)
+
+
+async def close_stale_seances(db: AsyncSession) -> int:
+    """Clôture automatiquement les séances "en_cours" depuis plus de 4h.
+
+    Appelée en tête des endpoints admin qui affichent les séances/logs
+    (pattern "cron paresseux" — pas d'infra de tâches planifiées dans ce
+    projet) : marque la séance terminee + auto_closed=True, avec une durée
+    plafonnée à AUTO_CLOSE_AFTER puisque l'heure réelle de fin est inconnue.
+    """
+    seuil = datetime.now(timezone.utc) - AUTO_CLOSE_AFTER
+    rows = (await db.execute(
+        select(Seance).where(
+            Seance.status == SeanceStatus.en_cours,
+            Seance.started_at.isnot(None),
+            Seance.started_at < seuil,
+        )
+    )).scalars().all()
+
+    for seance in rows:
+        seance.status       = SeanceStatus.terminee
+        seance.auto_closed   = True
+        seance.finished_at   = seance.started_at + AUTO_CLOSE_AFTER
+        seance.duree_minutes = int(AUTO_CLOSE_AFTER.total_seconds() // 60) - (seance.total_paused_minutes or 0)
+
+    if rows:
+        await db.flush()
+        logger.info("close_stale_seances: %d séance(s) clôturée(s) automatiquement.", len(rows))
+    return len(rows)
 
 
 # ── Séances ────────────────────────────────────────────────────────────────────
