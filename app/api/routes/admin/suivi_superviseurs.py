@@ -84,31 +84,49 @@ class SuperviseurDetail(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _count_missed_reports(db, teacher_id: uuid.UUID, nb_days: int = 7) -> int:
-    """
-    Compte le nombre de jours ouvrés (lun–sam) des `nb_days` derniers jours
-    pour lesquels l'enseignant n'a pas soumis de rapport journalier.
-    """
+def _working_days(nb_days: int = 7) -> list[date]:
+    """Jours ouvrés (lun–sam) des `nb_days` derniers jours calendaires."""
     from datetime import timedelta
     today = date.today()
-    # Jours à vérifier : lundi–samedi des nb_days derniers jours calendaires
     working_days: list[date] = []
     d = today
     while len(working_days) < nb_days:
         if d.weekday() != 6:  # pas dimanche
             working_days.append(d)
         d -= timedelta(days=1)
+    return working_days
 
-    # Rapports envoyés sur cette période
-    sent_result = await db.execute(
-        select(RapportJournalier.date_rapport).where(
-            RapportJournalier.teacher_id == teacher_id,
+
+async def _count_missed_reports_bulk(
+    db, teacher_ids: list[uuid.UUID], nb_days: int = 7,
+) -> dict[uuid.UUID, int]:
+    """
+    Pour chaque enseignant, compte le nombre de jours ouvrés (lun–sam) des
+    `nb_days` derniers jours sans rapport journalier soumis.
+
+    Une seule requête pour tous les enseignants (au lieu d'une requête par
+    enseignant) — c'était la source principale de lenteur du dashboard.
+    """
+    if not teacher_ids:
+        return {}
+
+    working_days = _working_days(nb_days)
+
+    rows = (await db.execute(
+        select(RapportJournalier.teacher_id, RapportJournalier.date_rapport).where(
+            RapportJournalier.teacher_id.in_(teacher_ids),
             RapportJournalier.date_rapport.in_(working_days),
         )
-    )
-    sent_dates = {r[0] for r in sent_result.all()}
-    missed = sum(1 for d in working_days if d not in sent_dates)
-    return missed
+    )).all()
+
+    sent_by_teacher: dict[uuid.UUID, set[date]] = {}
+    for tid, d in rows:
+        sent_by_teacher.setdefault(tid, set()).add(d)
+
+    return {
+        tid: sum(1 for d in working_days if d not in sent_by_teacher.get(tid, set()))
+        for tid in teacher_ids
+    }
 
 
 def _parse_teacher_ids(classes: Optional[list[str]]) -> list[uuid.UUID]:
@@ -204,52 +222,77 @@ async def _build_suivi_superviseurs(
     superviseurs = (await db.execute(q)).scalars().all()
 
     today = date.today()
+
+    # ── Pré-calcul groupé : évite une requête par enseignant supervisé ─────────
+    # (c'était la source principale de lenteur du dashboard : N superviseurs ×
+    # M enseignants = N×M allers-retours DB séquentiels)
+
+    all_teacher_ids: set[uuid.UUID] = set()
+    teacher_ids_by_sup: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for sup in superviseurs:
+        tids = _parse_teacher_ids(sup.classes)
+        teacher_ids_by_sup[sup.id] = tids
+        all_teacher_ids.update(tids)
+
+    all_teacher_ids_list = list(all_teacher_ids)
+
+    # Séances du jour pour tous les enseignants supervisés, en une seule requête
+    day_status_by_teacher: dict[uuid.UUID, set[SeanceStatus]] = {}
+    if all_teacher_ids_list:
+        day_filters = [
+            Seance.teacher_id.in_(all_teacher_ids_list),
+            func.date(Seance.date_seance) == today,
+        ]
+        if session_id:
+            day_filters.append(Seance.session_id == session_id)
+
+        rows = (await db.execute(
+            select(Seance.teacher_id, Seance.status).where(and_(*day_filters))
+        )).all()
+        for tid, st in rows:
+            day_status_by_teacher.setdefault(tid, set()).add(st)
+
+    # Rapports manqués (3+ sur 7 jours) pour tous les enseignants, en une requête
+    missed_by_teacher = await _count_missed_reports_bulk(db, all_teacher_ids_list)
+
+    # Noms des enseignants (pour l'alerte), en une seule requête
+    teacher_names: dict[uuid.UUID, str] = {}
+    if all_teacher_ids_list:
+        teacher_names = dict((await db.execute(
+            select(User.id, User.name).where(User.id.in_(all_teacher_ids_list))
+        )).all())
+
     result: list[SuperviseurSuiviItem] = []
 
     for sup in superviseurs:
-        teacher_ids    = _parse_teacher_ids(sup.classes)
+        teacher_ids    = teacher_ids_by_sup[sup.id]
         total_assignes = len(teacher_ids)
         presents       = 0
         en_cours_count = 0
 
         if teacher_ids:
-            # Séances du jour pour ces enseignants (en une seule requête)
-            day_filters = [
-                Seance.teacher_id.in_(teacher_ids),
-                func.date(Seance.date_seance) == today,
-            ]
-            if session_id:
-                day_filters.append(Seance.session_id == session_id)
-
-            rows = (await db.execute(
-                select(Seance.teacher_id, Seance.status).where(and_(*day_filters))
-            )).all()
-
             seen_en_cours: set[uuid.UUID] = set()
             seen_present:  set[uuid.UUID] = set()
-            for tid, st in rows:
-                if st == SeanceStatus.en_cours:
+            for tid in teacher_ids:
+                statuses = day_status_by_teacher.get(tid, set())
+                if SeanceStatus.en_cours in statuses:
                     seen_en_cours.add(tid)
-                elif st == SeanceStatus.terminee:
+                elif SeanceStatus.terminee in statuses:
                     seen_present.add(tid)
 
             en_cours_count = len(seen_en_cours)
             presents       = len(seen_present - seen_en_cours)
 
-        # Vérifier les tuteurs en alerte (3+ rapports manquants sur 7 jours)
-        tuteurs_en_alerte: list[TuteurEnAlerte] = []
-        if teacher_ids:
-            teacher_users = (await db.execute(
-                select(User).where(User.id.in_(teacher_ids))
-            )).scalars().all()
-            for t in teacher_users:
-                missed = await _count_missed_reports(db, t.id)
-                if missed >= 3:
-                    tuteurs_en_alerte.append(TuteurEnAlerte(
-                        teacher_id=str(t.id),
-                        name=t.name,
-                        rapports_manques=missed,
-                    ))
+        # Tuteurs en alerte (3+ rapports manquants sur 7 jours)
+        tuteurs_en_alerte: list[TuteurEnAlerte] = [
+            TuteurEnAlerte(
+                teacher_id=str(tid),
+                name=teacher_names.get(tid, "—"),
+                rapports_manques=missed_by_teacher.get(tid, 0),
+            )
+            for tid in teacher_ids
+            if missed_by_teacher.get(tid, 0) >= 3 and tid in teacher_names
+        ]
 
         result.append(SuperviseurSuiviItem(
             superviseur_id    = str(sup.id),

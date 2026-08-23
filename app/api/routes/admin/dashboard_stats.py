@@ -111,41 +111,57 @@ async def dashboard_stats(_: AdminUser, db: DB) -> DashboardStats:
     Chaque métrique = 1 requête SQL COUNT/GROUP BY — aucun transfert de données brutes.
     """
 
-    # ── Comptes de base (requêtes COUNT pures) ────────────────────────────────
+    # ── Comptes de base ────────────────────────────────────────────────────────
+    # Toutes les métriques COUNT indépendantes en une seule requête (sous-requêtes
+    # scalaires) au lieu d'un aller-retour DB par compteur — c'était la principale
+    # source de lenteur du dashboard : ~15 round-trips séquentiels réduits à 1.
 
-    schools_count = (await db.execute(
-        select(func.count()).select_from(School)
-    )).scalar_one()
-
-    school_regions_count = (await db.execute(
-        select(func.count(func.distinct(School.region))).where(School.region.isnot(None))
-    )).scalar_one()
-
-    teachers_count = (await db.execute(
-        select(func.count()).select_from(User).where(
-            User.role == UserRole.enseignant,
-            User.status == UserStatus.actif,
+    counts_row = (await db.execute(
+        select(
+            select(func.count()).select_from(School).scalar_subquery().label("schools"),
+            select(func.count(func.distinct(School.region)))
+                .where(School.region.isnot(None)).scalar_subquery().label("school_regions"),
+            select(func.count()).select_from(User).where(
+                User.role == UserRole.enseignant, User.status == UserStatus.actif,
+            ).scalar_subquery().label("teachers"),
+            select(func.count()).select_from(User).where(
+                User.role == UserRole.superviseur, User.status == UserStatus.actif,
+            ).scalar_subquery().label("superviseurs"),
+            select(func.count()).select_from(ProgramSession).scalar_subquery().label("sessions"),
+            select(func.count()).select_from(Eleve).where(Eleve.statut == "actif")
+                .scalar_subquery().label("students"),
+            select(func.count()).select_from(RapportProf).scalar_subquery().label("rapports"),
+            select(func.count()).select_from(SchoolClasse).scalar_subquery().label("classes_total"),
+            select(func.count()).select_from(EvaluationEleve).scalar_subquery().label("evaluations_total"),
+            select(func.count()).select_from(RapportJournalier)
+                .scalar_subquery().label("rapports_journaliers_total"),
+            select(func.count()).select_from(EleveRemplacement)
+                .scalar_subquery().label("remplacements_total"),
+            select(func.count()).select_from(EvaluationCompetence)
+                .where(EvaluationCompetence.active.is_(True))
+                .scalar_subquery().label("competences_total"),
+            select(func.count()).select_from(EvaluationDoc)
+                .where(EvaluationDoc.is_active.is_(True))
+                .scalar_subquery().label("evaluation_docs_total"),
+            select(func.count(func.distinct(EvaluationEleve.eleve_id)))
+                .scalar_subquery().label("evaluations_students_covered"),
         )
-    )).scalar_one()
+    )).one()
 
-    superviseurs_count = (await db.execute(
-        select(func.count()).select_from(User).where(
-            User.role == UserRole.superviseur,
-            User.status == UserStatus.actif,
-        )
-    )).scalar_one()
-
-    sessions_count = (await db.execute(
-        select(func.count()).select_from(ProgramSession)
-    )).scalar_one()
-
-    students_count = (await db.execute(
-        select(func.count()).select_from(Eleve).where(Eleve.statut == "actif")
-    )).scalar_one()
-
-    rapports_count = (await db.execute(
-        select(func.count()).select_from(RapportProf)
-    )).scalar_one()
+    schools_count                    = counts_row.schools
+    school_regions_count             = counts_row.school_regions
+    teachers_count                   = counts_row.teachers
+    superviseurs_count               = counts_row.superviseurs
+    sessions_count                   = counts_row.sessions
+    students_count                   = counts_row.students
+    rapports_count                   = counts_row.rapports
+    classes_total                    = counts_row.classes_total
+    evaluations_total                = counts_row.evaluations_total
+    rapports_journaliers_total       = counts_row.rapports_journaliers_total
+    remplacements_total              = counts_row.remplacements_total
+    competences_total                = counts_row.competences_total
+    evaluation_docs_total            = counts_row.evaluation_docs_total
+    evaluations_students_covered     = counts_row.evaluations_students_covered
 
     # ── Session active ────────────────────────────────────────────────────────
 
@@ -243,31 +259,9 @@ async def dashboard_stats(_: AdminUser, db: DB) -> DashboardStats:
         if 0 <= r.jour < 7 and (r.total_min or 0) > 0
     ]
 
-    # ── Autres pages : chiffres simples (COUNT) ───────────────────────────────
-
-    classes_total = (await db.execute(
-        select(func.count()).select_from(SchoolClasse)
-    )).scalar_one()
-
-    evaluations_total = (await db.execute(
-        select(func.count()).select_from(EvaluationEleve)
-    )).scalar_one()
-
-    rapports_journaliers_total = (await db.execute(
-        select(func.count()).select_from(RapportJournalier)
-    )).scalar_one()
-
-    remplacements_total = (await db.execute(
-        select(func.count()).select_from(EleveRemplacement)
-    )).scalar_one()
-
-    competences_total = (await db.execute(
-        select(func.count()).select_from(EvaluationCompetence).where(EvaluationCompetence.active.is_(True))
-    )).scalar_one()
-
-    evaluation_docs_total = (await db.execute(
-        select(func.count()).select_from(EvaluationDoc).where(EvaluationDoc.is_active.is_(True))
-    )).scalar_one()
+    # (classes_total, evaluations_total, rapports_journaliers_total,
+    # remplacements_total, competences_total, evaluation_docs_total :
+    # déjà calculés plus haut dans counts_row)
 
     # ── Évaluations par résultat (acquis / en_cours / a_aider) ────────────────
 
@@ -301,10 +295,7 @@ async def dashboard_stats(_: AdminUser, db: DB) -> DashboardStats:
     eleves_by_statut_selection = [ChartPoint(label=r[0], value=r[1]) for r in statut_selection_rows]
 
     # ── Suivi évaluation ───────────────────────────────────────────────────────
-
-    evaluations_students_covered = (await db.execute(
-        select(func.count(func.distinct(EvaluationEleve.eleve_id)))
-    )).scalar_one()
+    # (evaluations_students_covered : déjà calculé plus haut dans counts_row)
 
     evaluations_coverage_pct = (
         round(evaluations_students_covered / students_count * 100) if students_count else 0
