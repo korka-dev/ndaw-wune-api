@@ -30,6 +30,7 @@ from app.api.routes.app import (
     usage as app_usage,
     remarques as app_remarques,
     remplacements as app_remplacements,
+    remplacants as app_remplacants,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -87,3 +88,4 @@ api_router.include_router(app_evaluation_docs.router,      prefix="/app")  # /ap
 api_router.include_router(app_usage.router,                 prefix="/app")  # POST /app/usage
 api_router.include_router(app_remarques.router,             prefix="/app")  # /app/remarques
 api_router.include_router(app_remplacements.router,         prefix="/app")  # POST /app/remplacements
+api_router.include_router(app_remplacants.router,           prefix="/app")  # POST /app/remplacants
