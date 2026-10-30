@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
-Script pour créer un compte administrateur spécifique.
+Crée le compte administrateur initial s'il n'existe pas encore.
+
+Lancé à chaque démarrage du conteneur (voir Dockerfile) — il doit donc être
+idempotent : un compte existant n'est jamais modifié, pour ne pas écraser un
+mot de passe changé depuis le dashboard.
+
+Variables lues dans l'environnement (.env) :
+    ADMIN_EMAIL     (défaut : adiallo@gmail.com)
+    ADMIN_NAME      (défaut : Admin Diallo)
+    ADMIN_PASSWORD  (vide → aucun compte n'est créé)
 
 Usage :
     python scripts/create_admin.py
 """
 
 import asyncio
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -16,7 +26,6 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal as async_session_factory
 from app.core.security import hash_password
@@ -24,47 +33,34 @@ from app.models.user import User, UserRole, UserStatus
 
 
 async def create_admin() -> None:
-    email = "adiallo@gmail.com"
-    password = "P@sser123"
-    name = "Admin Diallo"
+    email = os.getenv("ADMIN_EMAIL", "adiallo@gmail.com").strip()
+    name = os.getenv("ADMIN_NAME", "Admin Diallo").strip()
+    password = os.getenv("ADMIN_PASSWORD", "")
 
-    print(f"[*] Connexion à la base de données...")
+    if not password:
+        print("[*] ADMIN_PASSWORD vide — création du compte admin ignorée.")
+        return
+
     async with async_session_factory() as session:
-        # Vérifier si l'utilisateur existe déjà
-        existing = await session.scalar(
-            select(User).where(User.email == email)
-        )
-        
+        existing = await session.scalar(select(User).where(User.email == email))
+
         if existing:
-            print(f"[!] L'utilisateur avec l'e-mail '{email}' existe déjà.")
-            
-            # Optionnel : Mettre à jour son rôle et son mot de passe s'il existe déjà
-            print(f"[*] Mise à jour du mot de passe et rôle admin pour '{email}'...")
-            existing.role = UserRole.admin
-            existing.status = UserStatus.actif
-            existing.password_hash = hash_password(password)
-            existing.must_change_password = False
-            await session.commit()
-            print(f"[+] ✅ Compte admin '{email}' mis à jour avec succès avec le mot de passe : {password}")
+            print(f"[*] Compte admin '{email}' déjà présent — inchangé.")
             return
 
-        # Création du compte administrateur
-        new_admin = User(
-            id=uuid.uuid4(),
-            name=name,
-            email=email,
-            password_hash=hash_password(password),
-            role=UserRole.admin,
-            status=UserStatus.actif,
-            must_change_password=False,  # False pour pouvoir se connecter directement sans forcer le changement
+        session.add(
+            User(
+                id=uuid.uuid4(),
+                name=name,
+                email=email,
+                password_hash=hash_password(password),
+                role=UserRole.admin,
+                status=UserStatus.actif,
+                must_change_password=False,
+            )
         )
-        
-        session.add(new_admin)
         await session.commit()
-        print(f"[+] ✅ Compte admin '{email}' créé avec succès !")
-        print(f"    - E-mail/Identifiant : {email}")
-        print(f"    - Mot de passe : {password}")
-        print(f"    - Rôle : {UserRole.admin.value}")
+        print(f"[+] ✅ Compte admin '{email}' créé (mot de passe : ADMIN_PASSWORD du .env).")
 
 
 def main() -> None:

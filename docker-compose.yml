@@ -5,7 +5,6 @@ services:
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
-    pull_policy: never
     restart: unless-stopped
     environment:
       POSTGRES_DB:       ${POSTGRES_DB}
@@ -16,7 +15,9 @@ services:
     # côté app est (15+5)×9 = 180 — 220 laisse ~40 connexions de marge pour
     # psql/migrations/outils d'admin. shared_buffers relevé à 512MB (VPS
     # 4 vCPU/8 Go — voir backend/loadtest/README.md pour la méthode de calcul).
-    command: postgres -c max_connections=220 -c shared_buffers=512MB
+    # Ces valeurs par défaut sont surchargées par POSTGRES_MAX_CONNECTIONS et
+    # POSTGRES_SHARED_BUFFERS dans .env (deploy_vps.sh les calcule selon le VPS).
+    command: postgres -c max_connections=${POSTGRES_MAX_CONNECTIONS:-220} -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -34,14 +35,13 @@ services:
   # ── Redis ───────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    pull_policy: never
     restart: unless-stopped
     command: >
       sh -c "
         if [ -n '${REDIS_PASSWORD:-}' ]; then
-          redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass '${REDIS_PASSWORD}';
+          redis-server --maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy allkeys-lru --requirepass '${REDIS_PASSWORD}';
         else
-          redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru;
+          redis-server --maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy allkeys-lru;
         fi
       "
     ports:

@@ -1,166 +1,205 @@
 #!/usr/bin/env bash
-
 # ==============================================================================
-# Script de déploiement automatique de l'API ARED Ndaw Wune sur un serveur VPS
-# OS supportés : Ubuntu 20.04+, Debian 11+
+#  NDAW WUNE — Installation complète de l'API sur un VPS neuf
+#  OS supportés : Ubuntu 20.04+, Debian 11+
+#
+#  Sur le VPS :
+#    git clone https://github.com/korka-dev/ndaw-wune-api.git /opt/ndawwune/api
+#    cd /opt/ndawwune/api
+#    sudo bash deploy_vps.sh
+#
+#  Le script est idempotent (relançable sans risque) :
+#    1. installe Docker, le pare-feu et Caddy s'ils manquent ;
+#    2. génère le .env (secrets aléatoires, dimensionnement selon vCPU/RAM)
+#       uniquement s'il n'existe pas — un .env existant n'est jamais modifié ;
+#    3. construit et démarre db + redis + backend ;
+#    4. publie l'API en HTTPS via Caddy (certificat Let's Encrypt automatique).
+#
+#  Options (variables d'environnement) :
+#    API_DOMAIN=api.exemple.com     domaine public de l'API (défaut : api.ndawwune.cloud)
+#    ADMIN_DOMAIN=admin.exemple.com domaine du dashboard, autorisé en CORS (défaut : admin.ndawwune.cloud)
+#    SKIP_CADDY=1                ne pas installer/configurer Caddy
+#    SKIP_FIREWALL=1             ne pas toucher au pare-feu UFW
+#
+#  Mises à jour ensuite : ./redeploy_backend.sh (ou le CI/CD GitHub Actions).
 # ==============================================================================
 
-# Couleurs pour l'affichage
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;36m'
-NC='\033[0m' # No Color
+set -euo pipefail
 
-echo -e "${BLUE}======================================================================${NC}"
-echo -e "${BLUE}        🚀 DÉPLOIEMENT AUTOMATIQUE DU BACKEND NDAW WUNE API           ${NC}"
-echo -e "${BLUE}======================================================================${NC}"
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-# S'assurer que le script est lancé en tant que root
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}Erreur : Ce script doit être exécuté en tant que root (sudo).${NC}"
-  exit 1
-fi
+log()     { echo -e "${CYAN}▶  $*${NC}"; }
+success() { echo -e "${GREEN}✅ $*${NC}"; }
+warn()    { echo -e "${YELLOW}⚠️  $*${NC}"; }
+err()     { echo -e "${RED}❌ $*${NC}"; exit 1; }
+header()  { echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════${NC}"; echo -e "${BOLD}   $*${NC}"; echo -e "${BOLD}${CYAN}══════════════════════════════════════════${NC}"; }
 
-# ------------------------------------------------------------------------------
-# 1. Mise à jour du système et installation des utilitaires de base
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[1/6] Mise à jour des packages système...${NC}"
-apt-get update -y && apt-get upgrade -y
-apt-get install -y curl git ufw jq gnupg lsb-release ca-certificates pwgen
+API_DOMAIN="${API_DOMAIN:-api.ndawwune.cloud}"
+ADMIN_DOMAIN="${ADMIN_DOMAIN:-admin.ndawwune.cloud}"
 
-# ------------------------------------------------------------------------------
-# 2. Installation de Docker et Docker Compose (si non installés)
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/6] Vérification de l'installation de Docker...${NC}"
+[ "$EUID" -eq 0 ] || err "Ce script doit être lancé en root : sudo bash deploy_vps.sh"
 
-if ! command -v docker &> /dev/null; then
-  echo -e "${BLUE}Docker n'est pas installé. Installation officielle de Docker en cours...${NC}"
+BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$BACKEND_DIR"
+
+# Remplace (ou ajoute) KEY=VALUE dans .env
+set_env() {
+  if grep -q "^$1=" .env; then
+    sed -i "s|^$1=.*|$1=$2|" .env
+  else
+    echo "$1=$2" >> .env
+  fi
+}
+
+header "NDAW WUNE — Installation de l'API ($API_DOMAIN)"
+
+# ── 1. Paquets système + Docker ───────────────────────────────────────────────
+header "Étape 1/5 — Paquets système et Docker"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y curl git ufw openssl ca-certificates gnupg lsb-release
+
+if ! command -v docker &>/dev/null; then
+  log "Installation de Docker (dépôt officiel)..."
+  . /etc/os-release   # ID = ubuntu | debian
   install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+  curl -fsSL "https://download.docker.com/linux/${ID}/gpg" | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
   chmod a+r /etc/apt/keyrings/docker.gpg
-
-  echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-    $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${ID} $(lsb_release -cs) stable" \
+    > /etc/apt/sources.list.d/docker.list
   apt-get update -y
   apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  
-  systemctl enable docker
-  systemctl start docker
-  echo -e "${GREEN}✓ Docker a été installé avec succès !${NC}"
+  systemctl enable --now docker
+  success "Docker installé."
 else
-  echo -e "${GREEN}✓ Docker est déjà installé.${NC}"
+  success "Docker déjà installé ($(docker --version))."
 fi
+docker compose version &>/dev/null || apt-get install -y docker-compose-plugin
 
-# ------------------------------------------------------------------------------
-# 3. Préparation du répertoire de déploiement
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[3/6] Préparation du répertoire de déploiement...${NC}"
-DEPLOY_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cd "$DEPLOY_DIR" || exit 1
-echo -e "${GREEN}✓ Utilisation du répertoire local : $DEPLOY_DIR${NC}"
+# ── 2. Fichier .env ───────────────────────────────────────────────────────────
+header "Étape 2/5 — Configuration (.env)"
+ADMIN_PASSWORD_GENERATED=""
 
-# ------------------------------------------------------------------------------
-# 4. Configuration sécurisée du fichier d'environnement (.env)
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[4/6] Configuration du fichier d'environnement .env...${NC}"
-
-if [ ! -f ".env" ]; then
-  echo -e "${BLUE}Création d'un nouveau fichier .env sécurisé...${NC}"
+if [ -f ".env" ]; then
+  success ".env existant conservé (secrets inchangés)."
+else
   cp .env.example .env
 
-  # Génération de clés aléatoires de haute sécurité
-  GEN_SECRET=$(pwgen -s 64 1)
-  GEN_PG_PASS=$(pwgen -s 32 1)
-  GEN_REDIS_PASS=$(pwgen -s 32 1)
+  # Dimensionnement selon le VPS — même règles que backend/loadtest/README.md :
+  # workers = 2×vCPU+1, et (pool+overflow)×workers + 40 de marge = max_connections.
+  CPUS=$(nproc)
+  RAM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+  WORKERS=$((2 * CPUS + 1))
+  if   [ "$WORKERS" -le 9 ];  then PER_WORKER=20
+  elif [ "$WORKERS" -le 17 ]; then PER_WORKER=15
+  else                             PER_WORKER=12
+  fi
+  OVERFLOW=5
+  POOL=$((PER_WORKER - OVERFLOW))
+  PG_MAX_CONN=$((WORKERS * PER_WORKER + 40))
+  PG_SHARED_BUFFERS=$((RAM_MB / 16))
+  REDIS_MAX=$((RAM_MB / 32)); [ "$REDIS_MAX" -lt 256 ] && REDIS_MAX=256
 
-  # Remplacement des valeurs vides par des valeurs générées de manière robuste
-  sed -i "s|SECRET_KEY=|SECRET_KEY=${GEN_SECRET}|g" .env
-  sed -i "s|POSTGRES_PASSWORD=|POSTGRES_PASSWORD=${GEN_PG_PASS}|g" .env
-  sed -i "s|REDIS_PASSWORD=|REDIS_PASSWORD=${GEN_REDIS_PASS}|g" .env
+  ADMIN_PASSWORD_GENERATED="$(openssl rand -hex 8)"
 
-  # Configurer CORS par défaut à '*' ou selon les besoins
-  sed -i "s|CORS_ORIGINS=.*|CORS_ORIGINS=*|g" .env
-  
-  echo -e "${GREEN}✓ Fichier .env créé avec des mots de passe générés de haute sécurité !${NC}"
-else
-  echo -e "${GREEN}✓ Fichier .env existant détecté (inchangé pour préserver vos secrets).${NC}"
+  set_env APP_ENV                  production
+  set_env SECRET_KEY               "$(openssl rand -hex 64)"
+  set_env POSTGRES_PASSWORD        "$(openssl rand -hex 24)"
+  set_env CORS_ORIGINS             "https://${ADMIN_DOMAIN}"
+  set_env ADMIN_PASSWORD           "$ADMIN_PASSWORD_GENERATED"
+  set_env GUNICORN_WORKERS         "$WORKERS"
+  set_env MAX_CONNECTIONS_POOL     "$POOL"
+  set_env MAX_OVERFLOW             "$OVERFLOW"
+  set_env POSTGRES_MAX_CONNECTIONS "$PG_MAX_CONN"
+  set_env POSTGRES_SHARED_BUFFERS  "${PG_SHARED_BUFFERS}MB"
+  set_env REDIS_MAXMEMORY          "${REDIS_MAX}mb"
+  chmod 600 .env
+
+  success ".env généré : ${CPUS} vCPU / ${RAM_MB} Mo → ${WORKERS} workers, pool ${POOL}+${OVERFLOW}, Postgres max_connections=${PG_MAX_CONN}, shared_buffers=${PG_SHARED_BUFFERS}MB."
 fi
 
-# ------------------------------------------------------------------------------
-# 5. Configuration de la sécurité réseau (Pare-feu UFW)
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[5/6] Configuration du Pare-feu (UFW)...${NC}"
-ufw allow 22/tcp comment 'SSH'
-ufw allow 80/tcp comment 'HTTP Reverse Proxy'
-ufw allow 443/tcp comment 'HTTPS Reverse Proxy'
+# ── 3. Pare-feu ───────────────────────────────────────────────────────────────
+header "Étape 3/5 — Pare-feu (UFW)"
+if [ "${SKIP_FIREWALL:-0}" = "1" ]; then
+  warn "SKIP_FIREWALL=1 — pare-feu ignoré."
+else
+  # Port SSH de la session en cours (évite de se bloquer si SSH n'est pas sur 22)
+  SSH_PORT="${SSH_CONNECTION##* }"; SSH_PORT="${SSH_PORT:-22}"
+  ufw allow "${SSH_PORT}/tcp" comment 'SSH' >/dev/null
+  [ "$SSH_PORT" = "22" ] || ufw allow 22/tcp comment 'SSH' >/dev/null
+  ufw allow 80/tcp  comment 'HTTP (Caddy)'  >/dev/null
+  ufw allow 443/tcp comment 'HTTPS (Caddy)' >/dev/null
+  ufw --force enable >/dev/null
+  success "UFW actif : SSH, 80 et 443 ouverts (Postgres/Redis/API restent sur 127.0.0.1)."
+fi
 
-# S'assurer que Postgres et Redis ne sont pas exposés à l'extérieur
-ufw deny 5432/tcp comment 'PostgreSQL (docker-only)'
-ufw deny 6379/tcp comment 'Redis (docker-only)'
-
-# Activer le pare-feu sans demander de confirmation interactive
-echo "y" | ufw enable
-echo -e "${GREEN}✓ Pare-feu configuré et activé !${NC}"
-
-# ------------------------------------------------------------------------------
-# 6. Démarrage des conteneurs via Docker Compose
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}[6/6] Lancement des conteneurs via Docker Compose...${NC}"
-
-# On s'assure que le volume PostgreSQL est bien créé
-docker compose down --remove-orphans
+# ── 4. Conteneurs ─────────────────────────────────────────────────────────────
+header "Étape 4/5 — Build et démarrage (db, redis, backend)"
+docker compose pull db redis
 docker compose up -d --build
 
-# Boucle d'attente de démarrage de l'API (Health Check)
-echo -e "\n${BLUE}⏳ Attente du démarrage complet de l'API Ndaw Wune (healthcheck)...${NC}"
-MAX_TRIES=20
-TRY=0
-API_UP=false
-
-while [ $TRY -lt $MAX_TRIES ]; do
-  # Récupère l'état du conteneur backend
-  STATUS=$(docker inspect --format='{{json .State.Health.Status}}' "$(docker compose ps -q backend)" 2>/dev/null | tr -d '"')
-  
-  if [ "$STATUS" = "healthy" ]; then
-    API_UP=true
-    break
-  fi
-  
-  echo -e "Attente... Essai $((TRY+1))/$MAX_TRIES (Statut actuel : ${STATUS:-en cours de démarrage})"
+log "Attente du healthcheck (migrations Alembic incluses)..."
+STATUS="starting"
+for i in $(seq 1 30); do
+  STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q backend)" 2>/dev/null || echo "starting")
+  [ "$STATUS" = "healthy" ] && break
+  echo "  ($i/30) statut : $STATUS"
   sleep 6
-  TRY=$((TRY+1))
 done
+if [ "$STATUS" != "healthy" ]; then
+  docker compose logs --tail=60 backend
+  err "L'API n'est pas healthy. Voir les logs ci-dessus."
+fi
+success "API en ligne sur 127.0.0.1:8000."
 
-if [ "$API_UP" = true ]; then
-  echo -e "\n${GREEN}======================================================================${NC}"
-  echo -e "${GREEN}  🎉 SUCCÈS : L'API Ndaw Wune est en ligne et parfaitement fonctionnelle !${NC}"
-  echo -e "${GREEN}======================================================================${NC}"
-  echo -e "${BLUE}🌍 Port exposé localement : http://localhost:8000${NC}"
-  echo -e "${BLUE}📂 Migrations de base de données : Appliquées avec succès ✓${NC}"
-  echo -e "${BLUE}🛡️ Services isolés (Postgres et Redis) : Sécurisés par le Pare-feu ✓${NC}"
+# ── 5. Caddy (HTTPS) ──────────────────────────────────────────────────────────
+header "Étape 5/5 — Reverse proxy HTTPS (Caddy)"
+if [ "${SKIP_CADDY:-0}" = "1" ]; then
+  warn "SKIP_CADDY=1 — Caddy ignoré."
 else
-  echo -e "\n${RED}⚠️ Erreur : L'API n'a pas pu démarrer dans le temps imparti.${NC}"
-  echo -e "${RED}Veuillez vérifier les logs avec la commande : docker compose logs backend${NC}"
-  exit 1
+  if ! command -v caddy &>/dev/null; then
+    log "Installation de Caddy..."
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -y
+    apt-get install -y caddy
+  fi
+
+  # Caddyfile principal = simple import de /etc/caddy/sites/*.caddy, partagé
+  # avec le dashboard admin. Le Caddyfile d'exemple installé par le paquet
+  # (page d'accueil sur :80) est remplacé ; un Caddyfile personnalisé est conservé.
+  mkdir -p /etc/caddy/sites
+  if [ ! -f /etc/caddy/Caddyfile ] || grep -q "/usr/share/caddy" /etc/caddy/Caddyfile; then
+    echo "import /etc/caddy/sites/*.caddy" > /etc/caddy/Caddyfile
+  elif ! grep -q "import /etc/caddy/sites/\*.caddy" /etc/caddy/Caddyfile; then
+    echo -e "\nimport /etc/caddy/sites/*.caddy" >> /etc/caddy/Caddyfile
+  fi
+
+  sed "s/api\.ndawwune\.cloud/${API_DOMAIN}/g" Caddyfile.api > /etc/caddy/sites/ndawwune-api.caddy
+
+  if caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+    systemctl enable --now caddy >/dev/null
+    systemctl reload caddy
+    success "Caddy configuré pour https://${API_DOMAIN}"
+  else
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile || true
+    warn "Config Caddy invalide (un domaine est peut-être déjà défini dans /etc/caddy/Caddyfile) — Caddy non rechargé."
+  fi
 fi
 
-# ------------------------------------------------------------------------------
-# 7. Bonus : Configuration Reverse Proxy automatique (Caddy)
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}💡 ÉTAPE FINALE CONSEILLÉE : Configurer votre nom de domaine (HTTPS)${NC}"
-echo -e "Pour exposer votre API de manière sécurisée (obligatoire pour iOS/Android en production) :"
-echo -e "1. Installez le serveur Caddy :"
-echo -e "   ${BLUE}sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https${NC}"
-echo -e "   ${BLUE}curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg${NC}"
-echo -e "   ${BLUE}curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list${NC}"
-echo -e "   ${BLUE}sudo apt update && sudo apt install caddy${NC}"
-echo -e "\n2. Créez un fichier Caddyfile dans ${BLUE}/etc/caddy/Caddyfile${NC} avec ce contenu :"
-echo -e "   ${GREEN}api.votre-domaine.com {${NC}"
-echo -e "   ${GREEN}    reverse_proxy localhost:8000${NC}"
-echo -e "   ${GREEN}}${NC}"
-echo -e "\n3. Redémarrez Caddy : ${BLUE}sudo systemctl restart caddy${NC}"
-echo -e "Caddy s'occupera automatiquement d'installer et renouveler votre certificat SSL Let's Encrypt ! 🛡️"
-echo -e "\n${BLUE}======================================================================${NC}"
+# ── Résumé ────────────────────────────────────────────────────────────────────
+header "Installation terminée"
+docker compose ps
+echo ""
+success "API : https://${API_DOMAIN}/health  (le DNS de ${API_DOMAIN} doit pointer vers ce VPS)"
+if [ -n "$ADMIN_PASSWORD_GENERATED" ]; then
+  echo ""
+  echo -e "${BOLD}Compte administrateur créé :${NC}"
+  echo -e "   E-mail       : $(grep '^ADMIN_EMAIL=' .env | cut -d= -f2-)"
+  echo -e "   Mot de passe : ${BOLD}${ADMIN_PASSWORD_GENERATED}${NC}"
+  echo -e "   (aussi stocké dans .env → ADMIN_PASSWORD ; changez-le après la première connexion)"
+fi
+echo ""
+log "Mises à jour : ./redeploy_backend.sh   |   Logs : docker compose logs -f backend"

@@ -5,18 +5,11 @@
 #  le port n'est plus publié que sur localhost, pas sur 0.0.0.0).
 #  Caddy fait le SSL (automatique via Let's Encrypt) et le reverse proxy.
 #
-#  Le VPS a déjà Caddy installé et actif (utilisé pour admin.ndawwune.cloud).
-#  Ce fichier n'est PAS chargé automatiquement : il faut l'importer ou fusionner
-#  son contenu dans le Caddyfile principal du VPS.
-#
-#  Sur le VPS :
-#    1. Localiser le Caddyfile principal :
-#         sudo find / -name "Caddyfile*" 2>/dev/null
-#    2. Soit copier ce bloc directement dedans, soit l'importer :
-#         import /chemin/vers/ndaw-wune/backend/Caddyfile.api
-#    3. Vérifier la config puis recharger :
-#         sudo caddy validate --config /chemin/vers/Caddyfile
-#         sudo caddy reload --config /chemin/vers/Caddyfile
+#  Installé automatiquement par deploy_vps.sh : copié dans
+#  /etc/caddy/sites/ndawwune-api.caddy (le domaine peut être changé avec
+#  API_DOMAIN=...), le Caddyfile principal faisant `import /etc/caddy/sites/*.caddy`.
+#  Le dashboard admin installe de la même façon son propre fichier
+#  (ndawwune-admin.caddy) — un seul Caddy sert les deux domaines.
 #
 #  Pense à créer l'enregistrement DNS (A/AAAA) pour api.ndawwune.cloud
 #  pointant vers l'IP de ce VPS avant de recharger — sinon l'émission du

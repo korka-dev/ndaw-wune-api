@@ -25,6 +25,11 @@ RUN pip install --upgrade pip \
 # ── Code source ───────────────────────────────────────────────────────────────
 COPY --chown=appuser:appgroup . .
 
+# Dossier des fichiers uploadés : doit exister dans l'image et appartenir à
+# appuser, sinon le volume Docker "uploads_data" est créé en root au premier
+# démarrage et l'API ne peut plus y écrire.
+RUN mkdir -p /app/uploads && chown appuser:appgroup /app/uploads
+
 # Passer à l'utilisateur non-root
 USER appuser
 

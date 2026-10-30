@@ -59,14 +59,20 @@ class Settings(BaseSettings):
         """
         Origines autorisées par le middleware CORS.
 
-        Production : uniquement le dashboard admin (https://admin.ndawwune.cloud).
+        Production : uniquement le(s) dashboard(s) admin déclarés dans CORS_ORIGINS
+          (ex : https://admin.ndawwune.cloud) — "*" y est ignoré. Par défaut, si
+          CORS_ORIGINS est vide : https://admin.ndawwune.cloud.
           L'app mobile est une application native React Native — elle ne passe pas
           par le mécanisme CORS du navigateur et n'a donc pas besoin d'être listée.
 
         Développement : localhost + origines supplémentaires déclarées dans CORS_ORIGINS.
         """
         if self.is_production:
-            return ["https://admin.ndawwune.cloud"]
+            origins = [
+                o.strip() for o in self.CORS_ORIGINS.split(",")
+                if o.strip().startswith("https://")
+            ]
+            return origins or ["https://admin.ndawwune.cloud"]
 
         # Développement : origines locales par défaut
         origins = [

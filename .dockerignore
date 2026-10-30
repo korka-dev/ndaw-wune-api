@@ -1,0 +1,12 @@
+# Secrets : jamais dans l'image (les variables arrivent via env_file du compose)
+.env
+.env.dev
+monitoring/alertmanager.yml
+
+.git
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+uploads/
+.DS_Store
