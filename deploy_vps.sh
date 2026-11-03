@@ -124,10 +124,14 @@ header "Étape 3/5 — Pare-feu (UFW)"
 if [ "${SKIP_FIREWALL:-0}" = "1" ]; then
   warn "SKIP_FIREWALL=1 — pare-feu ignoré."
 else
-  # Port SSH de la session en cours (évite de se bloquer si SSH n'est pas sur 22)
-  SSH_PORT="${SSH_CONNECTION##* }"; SSH_PORT="${SSH_PORT:-22}"
-  ufw allow "${SSH_PORT}/tcp" comment 'SSH' >/dev/null
-  [ "$SSH_PORT" = "22" ] || ufw allow 22/tcp comment 'SSH' >/dev/null
+  # Ports SSH : 22 + tout port sur lequel sshd écoute + celui de la session en
+  # cours — évite de se bloquer hors du serveur si SSH n'est pas sur 22.
+  # SSH_CONNECTION est absent dans certaines sessions (Cursor, console web…).
+  SSH_CONN="${SSH_CONNECTION:-}"
+  SSH_PORTS="22 $(ss -tlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}') ${SSH_CONN##* }"
+  for port in $(echo "$SSH_PORTS" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un); do
+    ufw allow "${port}/tcp" comment 'SSH' >/dev/null
+  done
   ufw allow 80/tcp  comment 'HTTP (Caddy)'  >/dev/null
   ufw allow 443/tcp comment 'HTTPS (Caddy)' >/dev/null
   ufw --force enable >/dev/null
