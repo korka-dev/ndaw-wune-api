@@ -50,6 +50,7 @@ CMD ["sh", "-c", \
        --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
        --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
        --bind 0.0.0.0:8000 \
+       --forwarded-allow-ips '*' \
        --timeout 120 \
        --access-logfile - \
        --error-logfile -"]

@@ -1,3 +1,4 @@
+import logging
 import re
 
 from datetime import datetime, timezone
@@ -10,14 +11,17 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import settings
 from app.core.database import get_db
 
 from app.core.deps import CurrentUser, bearer_scheme
 from app.core.security import create_token_pair, decode_token, is_token_revoked, revoke_token, verify_password
 
-# Instance locale — le wiring global est dans main.py
-limiter = Limiter(key_func=get_remote_address)
-from app.models.user import User, UserStatus
+# Instance locale — le wiring global est dans main.py.
+# Compteurs dans Redis : avec N workers gunicorn, un stockage en mémoire
+# multiplierait la limite par N (chaque worker compte de son côté).
+limiter = Limiter(key_func=get_remote_address, storage_uri=settings.REDIS_URL)
+from app.models.user import User, UserRole, UserStatus
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -28,6 +32,8 @@ from app.schemas.auth import (
     TokenResponse,
 )
 from app.services import user_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -208,6 +214,13 @@ async def reset_password(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Compte désactivé. Contactez l'administrateur.",
         )
+
+    # Route publique, sans OTP : un compte d'administration ne doit JAMAIS pouvoir
+    # être pris par quiconque connaît son e-mail. Réponse identique (204) pour ne
+    # rien révéler ; le mot de passe d'un admin se change connecté, ou par un autre admin.
+    if user.role in (UserRole.admin, UserRole.coordonnateur):
+        logger.warning("[Security] reset-password public refusé pour un compte %s", user.role.value)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     await user_service.change_password(db, user, body.new_password)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
