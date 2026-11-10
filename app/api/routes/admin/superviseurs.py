@@ -135,28 +135,28 @@ async def export_superviseurs_xlsx(db: DB, _: AdminUser, fields: Optional[str] =
 
 
 @router.get("/{superviseur_id}", response_model=UserResponse)
-async def get_superviseur(superviseur_id: uuid.UUID, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.get_by_id(db, superviseur_id)
+async def get_superviseur(superviseur_id: uuid.UUID, db: DB, current_user: AdminUser) -> UserResponse:
+    return await user_service.get_managed(db, superviseur_id, current_user, _SUPERVISEUR_ROLES)
 
 
 @router.patch("/{superviseur_id}", response_model=UserResponse)
 async def update_superviseur(
-    superviseur_id: uuid.UUID, body: UserUpdate, db: DB, _: AdminUser
+    superviseur_id: uuid.UUID, body: UserUpdate, db: DB, current_user: AdminUser
 ) -> UserResponse:
-    return await user_service.update_user(db, superviseur_id, body)
+    return await user_service.update_user(db, superviseur_id, body, current_user, _SUPERVISEUR_ROLES)
 
 
 @router.delete("/{superviseur_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_superviseur(
     superviseur_id: uuid.UUID, db: DB, current_user: AdminUser
 ) -> Response:
-    await user_service.delete_user(db, superviseur_id, current_user.id)
+    await user_service.delete_user(db, superviseur_id, current_user.id, current_user, _SUPERVISEUR_ROLES)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{superviseur_id}/toggle-status", response_model=UserResponse)
-async def toggle_status(superviseur_id: uuid.UUID, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.toggle_status(db, superviseur_id)
+async def toggle_status(superviseur_id: uuid.UUID, db: DB, current_user: AdminUser) -> UserResponse:
+    return await user_service.toggle_status(db, superviseur_id, current_user, _SUPERVISEUR_ROLES)
 
 
 @router.post("/{superviseur_id}/assign-teachers", status_code=status.HTTP_204_NO_CONTENT)
@@ -164,15 +164,15 @@ async def assign_teachers(
     superviseur_id: uuid.UUID,
     body: dict,
     db: DB,
-    _: AdminUser,
+    current_user: AdminUser,
 ) -> Response:
     """
     Assigne une liste d'enseignants à un superviseur via le champ `classes`
     (stockage des IDs enseignants assignés — adapté au modèle existant).
     Retourne 204 No Content.
     """
-    # On vérifie que le superviseur existe
-    await user_service.get_by_id(db, superviseur_id)
+    # On vérifie que le superviseur existe et que le compte est bien un superviseur
+    await user_service.get_managed(db, superviseur_id, current_user, _SUPERVISEUR_ROLES)
     assigned_ids: list[str] = [str(i) for i in body.get("assigned_teacher_ids", [])]
 
     # Stocker les IDs assignés dans le champ `classes` du superviseur

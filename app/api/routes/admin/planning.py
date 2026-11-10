@@ -5,8 +5,11 @@ import re
 import uuid
 from datetime import datetime as _dt
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, select
 
+from app.core.export_utils import sanitize_cell
+from app.core.upload_utils import read_upload_capped
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
 from app.core.redis import invalidate_sync_caches as _invalidate_sync_caches
@@ -298,6 +301,45 @@ async def list_planning(
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 
+@router.get("/export/csv")
+async def export_planning_csv(
+    db: DB,
+    _: AdminUser,
+    session_id: uuid.UUID | None = None,
+    semaine: int | None = None,
+) -> StreamingResponse:
+    """Export CSV du planning (mêmes filtres que la liste, SANS pagination d'écran).
+    Colonnes compatibles avec l'import : semaine, jour, heure_debut, heure_fin, classe, matiere."""
+    q = select(PlanningSegment).order_by(
+        PlanningSegment.semaine.nulls_first(), PlanningSegment.jour, PlanningSegment.heure_debut
+    )
+    if session_id:
+        q = q.where(PlanningSegment.session_id == session_id)
+    if semaine is not None:
+        q = q.where(PlanningSegment.semaine == semaine)
+    segments = (await db.execute(q)).scalars().all()
+
+    buf = io.StringIO()
+    buf.write("\ufeff")  # BOM : accents corrects à l'ouverture dans Excel
+    writer = csv.writer(buf)
+    writer.writerow(["semaine", "jour", "heure_debut", "heure_fin", "classe", "matiere"])
+    for seg in segments:
+        writer.writerow([
+            "" if seg.semaine is None else seg.semaine,
+            f"Jour {seg.jour + 1}",   # relisible tel quel par l'import
+            seg.heure_debut.strftime("%H:%M"),
+            seg.heure_fin.strftime("%H:%M"),
+            sanitize_cell(seg.classe or ""),
+            sanitize_cell(seg.matiere or ""),
+        ])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="planning.csv"'},
+    )
+
+
 @router.post("", response_model=PlanningSegmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_segment(body: PlanningSegmentCreate, db: DB, _: AdminUser):
     seg = PlanningSegment(**body.model_dump())
@@ -355,7 +397,7 @@ async def import_planning(
 
     Retourne { imported: N, errors: [{row, error}] }
     """
-    content  = await file.read()
+    content  = await read_upload_capped(file)
     filename = (file.filename or "").lower()
     ctype    = (file.content_type or "").lower()
 
@@ -369,23 +411,37 @@ async def import_planning(
     else:
         segments, errors = _parse_csv(content)
 
-    # Supprimer l'ancien planning (remplacement complet — limité à la semaine si fournie)
+    # ── Validation COMPLÈTE avant toute suppression ──────────────────────────
+    # Un fichier vide ou illisible ne doit jamais effacer le planning existant.
+    valides: list[dict] = []
+    for seg_data in segments:
+        try:
+            # Les parseurs retournent des strings "HH:MM" — asyncpg exige datetime.time
+            seg_data["heure_debut"] = _dt.strptime(seg_data["heure_debut"], "%H:%M").time()
+            seg_data["heure_fin"]   = _dt.strptime(seg_data["heure_fin"],   "%H:%M").time()
+            valides.append(seg_data)
+        except Exception as exc:
+            errors.append({"row": "-", "error": str(exc)})
+
+    if not valides:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Aucun créneau valide dans le fichier : le planning existant n'a PAS été modifié.",
+                "errors": errors,
+            },
+        )
+
+    # Remplacement (limité à la semaine si fournie), dans la même transaction que l'insertion
     del_stmt = delete(PlanningSegment).where(PlanningSegment.session_id == session_id)
     if semaine is not None:
         del_stmt = del_stmt.where(PlanningSegment.semaine == semaine)
     await db.execute(del_stmt)
 
     imported = 0
-    for seg_data in segments:
-        try:
-            # Les parseurs retournent des strings "HH:MM" — asyncpg exige datetime.time
-            seg_data["heure_debut"] = _dt.strptime(seg_data["heure_debut"], "%H:%M").time()
-            seg_data["heure_fin"]   = _dt.strptime(seg_data["heure_fin"],   "%H:%M").time()
-            seg = PlanningSegment(session_id=session_id, semaine=semaine, **seg_data)
-            db.add(seg)
-            imported += 1
-        except Exception as exc:
-            errors.append({"row": "-", "error": str(exc)})
+    for seg_data in valides:
+        db.add(PlanningSegment(session_id=session_id, semaine=semaine, **seg_data))
+        imported += 1
 
     try:
         await db.commit()

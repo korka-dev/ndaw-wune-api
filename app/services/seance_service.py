@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 AUTO_CLOSE_AFTER = timedelta(hours=4)
 
 
-async def close_stale_seances(db: AsyncSession) -> int:
+async def close_stale_seances(db: AsyncSession, teacher_id: uuid.UUID | None = None) -> int:
     """Clôture automatiquement les séances "en_cours" depuis plus de 4h.
 
     Appelée en tête des endpoints admin qui affichent les séances/logs
@@ -33,13 +33,14 @@ async def close_stale_seances(db: AsyncSession) -> int:
     plafonnée à AUTO_CLOSE_AFTER puisque l'heure réelle de fin est inconnue.
     """
     seuil = datetime.now(timezone.utc) - AUTO_CLOSE_AFTER
-    rows = (await db.execute(
-        select(Seance).where(
-            Seance.status == SeanceStatus.en_cours,
-            Seance.started_at.isnot(None),
-            Seance.started_at < seuil,
-        )
-    )).scalars().all()
+    q = select(Seance).where(
+        Seance.status == SeanceStatus.en_cours,
+        Seance.started_at.isnot(None),
+        Seance.started_at < seuil,
+    )
+    if teacher_id is not None:
+        q = q.where(Seance.teacher_id == teacher_id)
+    rows = (await db.execute(q)).scalars().all()
 
     for seance in rows:
         seance.status       = SeanceStatus.terminee
@@ -117,6 +118,10 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
         teacher_id, body.session_id, body.classe, body.planning_segment_id,
     )
     try:
+        # Récupération d'une séance oubliée : la clôture ne dépend plus de
+        # l'ouverture d'une page admin — elle est faite ici, au moment où le
+        # tuteur en aurait besoin (la séance est marquée auto_closed).
+        await close_stale_seances(db, teacher_id)
         existing = await get_active_seance(db, teacher_id)
         if existing:
             raise HTTPException(
@@ -134,7 +139,7 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
             logger.error("DB Error lors de start_seance teacher=%s : %s", teacher_id, orig)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Impossible de créer la séance : {orig}",
+                detail="Impossible de créer la séance. Réessayez ou contactez le support.",
             )
         await db.refresh(seance)
         return seance
@@ -149,7 +154,7 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Erreur inattendue lors du démarrage : {type(exc).__name__}: {exc}",
+            detail="Erreur inattendue lors du démarrage de la séance. Réessayez ou contactez le support.",
         )
 
 
@@ -269,7 +274,7 @@ async def finish_seance(
             logger.error("DB Error lors de finish_seance seance_id=%s : %s", seance_id, orig)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Impossible de clôturer la séance : {orig}",
+                detail="Impossible de clôturer la séance. Réessayez ou contactez le support.",
             )
         await db.refresh(seance)
         return seance
@@ -283,7 +288,7 @@ async def finish_seance(
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Erreur inattendue lors de la clôture : {type(exc).__name__}: {exc}",
+            detail="Erreur inattendue lors de la clôture. Réessayez ou contactez le support.",
         )
 
 
@@ -337,7 +342,7 @@ async def submit_rapport(
             logger.error("DB Error lors de submit_rapport teacher=%s seance_id=%s : %s", teacher_id, body.seance_id, orig)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Impossible de soumettre le rapport : {orig}",
+                detail="Impossible de soumettre le rapport. Réessayez ou contactez le support.",
             )
         await db.refresh(rapport)
         return rapport
@@ -351,7 +356,7 @@ async def submit_rapport(
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Erreur inattendue lors de la soumission du rapport : {type(exc).__name__}: {exc}",
+            detail="Erreur inattendue lors de la soumission du rapport. Réessayez ou contactez le support.",
         )
 
 

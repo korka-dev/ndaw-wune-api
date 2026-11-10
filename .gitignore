@@ -20,3 +20,8 @@ uploads/
 # Divers
 *.log
 .DS_Store
+
+# Données nominatives — ne JAMAIS versionner (élèves, tuteurs, téléphones)
+*.xlsx
+*.xls
+*.csv

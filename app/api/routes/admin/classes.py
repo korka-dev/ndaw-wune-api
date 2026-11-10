@@ -10,6 +10,7 @@ from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile,
 from sqlalchemy import select, func
 
 from app.core.deps import AdminUser, DB
+from app.core.upload_utils import read_upload_capped
 from app.core.export_utils import build_xlsx_response
 from app.core.pagination import Page, Pagination
 from app.models.eleve import Eleve
@@ -126,7 +127,7 @@ async def reimport_classes_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
     - Classe existante (même nom + même école) → ignorée
     - Nouvelle classe → créée ; école créée si elle n'existe pas encore
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:

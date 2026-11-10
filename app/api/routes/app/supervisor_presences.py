@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from app.core.deps import DB, SuperviseurUser
 from app.models.supervisor_presence import SupervisorPresenceCheck
+from app.services.supervisor_service import get_supervised_teacher_ids
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -108,14 +109,25 @@ async def submit_presence_check(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"date_jour invalide : {body.date_jour}")
 
+    # Validation complète avant toute écriture : chaque enseignant pointé doit
+    # relever de ce superviseur (sinon refus, sans aucune mutation).
+    parsed_entries = []
+    for entry in body.entries:
+        try:
+            parsed_entries.append((uuid.UUID(entry.teacher_id), entry))
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"teacher_id invalide : {entry.teacher_id}")
+    supervised = set(await get_supervised_teacher_ids(db, current_user))
+    if any(tid not in supervised for tid, _ in parsed_entries):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Un ou plusieurs enseignants ne relèvent pas de votre périmètre de supervision.",
+        )
+
     now = datetime.now(timezone.utc)
     created = updated = 0
 
-    for entry in body.entries:
-        try:
-            teacher_uuid = uuid.UUID(entry.teacher_id)
-        except ValueError:
-            raise HTTPException(status_code=422, detail=f"teacher_id invalide : {entry.teacher_id}")
+    for teacher_uuid, entry in parsed_entries:
 
         existing = (await db.execute(
             select(SupervisorPresenceCheck).where(

@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from typing import Optional, List
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class RapportJournalierCreate(BaseModel):
@@ -11,10 +11,11 @@ class RapportJournalierCreate(BaseModel):
     ecole:                    str
     superviseur:              str
     nom_tuteur:               str
-    nb_absences:              int              = 0
+    # Bornes physiques : on rejette les valeurs impossibles (négatives, absurdes)
+    nb_absences:              int              = Field(default=0, ge=0, le=1000)
     absents:                  Optional[str]    = None   # JSON sérialisé
-    semaine:                  int
-    jour_cours:               int
+    semaine:                  int              = Field(ge=0, le=100)
+    jour_cours:               int              = Field(ge=0, le=100)
     difficultes:              str                        # JSON sérialisé
     autres_difficultes:       Optional[str]    = None
     description_difficultes:  Optional[str]    = None

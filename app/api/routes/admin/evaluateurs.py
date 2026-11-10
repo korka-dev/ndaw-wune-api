@@ -50,35 +50,43 @@ async def create_evaluateur(body: UserCreate, db: DB, _: AdminUser) -> UserRespo
 
 
 @router.get("/{evaluateur_id}", response_model=UserResponse)
-async def get_evaluateur(evaluateur_id: uuid.UUID, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.get_by_id(db, evaluateur_id)
+async def get_evaluateur(evaluateur_id: uuid.UUID, db: DB, current_user: AdminUser) -> UserResponse:
+    return await user_service.get_managed(db, evaluateur_id, current_user, (UserRole.coordonnateur,), evaluateur_only=True)
 
 
 @router.patch("/{evaluateur_id}", response_model=UserResponse)
 async def update_evaluateur(
-    evaluateur_id: uuid.UUID, body: UserUpdate, db: DB, _: AdminUser
+    evaluateur_id: uuid.UUID, body: UserUpdate, db: DB, current_user: AdminUser
 ) -> UserResponse:
-    return await user_service.update_user(db, evaluateur_id, body)
+    return await user_service.update_user(
+        db, evaluateur_id, body, current_user, (UserRole.coordonnateur,), evaluateur_only=True
+    )
 
 
 @router.delete("/{evaluateur_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_evaluateur(
     evaluateur_id: uuid.UUID, db: DB, current_user: AdminUser
 ) -> Response:
-    await user_service.delete_user(db, evaluateur_id, current_user.id)
+    await user_service.delete_user(
+        db, evaluateur_id, current_user.id, current_user, (UserRole.coordonnateur,), evaluateur_only=True
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{evaluateur_id}/toggle-status", response_model=UserResponse)
-async def toggle_status(evaluateur_id: uuid.UUID, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.toggle_status(db, evaluateur_id)
+async def toggle_status(evaluateur_id: uuid.UUID, db: DB, current_user: AdminUser) -> UserResponse:
+    return await user_service.toggle_status(
+        db, evaluateur_id, current_user, (UserRole.coordonnateur,), evaluateur_only=True
+    )
 
 
 @router.post("/{evaluateur_id}/assign-teachers", status_code=status.HTTP_204_NO_CONTENT)
 async def assign_teachers(
-    evaluateur_id: uuid.UUID, body: dict, db: DB, _: AdminUser
+    evaluateur_id: uuid.UUID, body: dict, db: DB, current_user: AdminUser
 ) -> Response:
-    await user_service.get_by_id(db, evaluateur_id)
+    await user_service.get_managed(
+        db, evaluateur_id, current_user, (UserRole.coordonnateur,), evaluateur_only=True
+    )
     assigned_ids: list[str] = [str(i) for i in body.get("assigned_teacher_ids", [])]
     result = await db.execute(select(User).where(User.id == evaluateur_id))
     ev = result.scalar_one_or_none()

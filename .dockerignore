@@ -10,3 +10,16 @@ __pycache__/
 venv/
 uploads/
 .DS_Store
+
+# Données nominatives (élèves, tuteurs, contacts) : jamais dans l'image
+*.xlsx
+*.xls
+*.csv
+**/*.xlsx
+**/*.csv
+*.pdf
+.env.*
+!.env.example
+tests/
+loadtest/
+monitoring/

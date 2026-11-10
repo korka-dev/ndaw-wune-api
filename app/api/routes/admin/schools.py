@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
+from app.core.upload_utils import read_upload_capped
 from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.school import School
@@ -108,7 +109,7 @@ async def export_schools_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None
 
 @router.post("/import/csv")
 async def import_schools_csv(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
-    content = (await file.read()).decode("utf-8-sig")
+    content = (await read_upload_capped(file)).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
     if "nom" not in {f.lower().strip() for f in (reader.fieldnames or [])}:
         raise HTTPException(status_code=422, detail="Colonne 'nom' requise.")
@@ -144,7 +145,7 @@ async def reimport_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
     - École existante (même nom) → mise à jour des champs modifiés
     - Nouvelle école → créée
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:
@@ -318,7 +319,7 @@ async def import_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)
     Colonnes utilisées : IEF · COMMUNE · SCHOOL
     Les autres colonnes (enseignant, élève, etc.) sont ignorées.
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:

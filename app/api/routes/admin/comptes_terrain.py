@@ -62,7 +62,7 @@ async def list_comptes_terrain(
 
 
 @router.post("/{user_id}/reset-password", response_model=UserResponse)
-async def reset_password(user_id: uuid.UUID, body: SetPasswordRequest, db: DB, _: AdminUser) -> UserResponse:
+async def reset_password(user_id: uuid.UUID, body: SetPasswordRequest, db: DB, current_user: AdminUser) -> UserResponse:
     target = await user_service.get_by_id(db, user_id)
     if target.role not in _ROLES_TERRAIN:
         raise HTTPException(
@@ -70,4 +70,6 @@ async def reset_password(user_id: uuid.UUID, body: SetPasswordRequest, db: DB, _
             "Ce endpoint ne concerne que les comptes tuteurs et superviseurs "
             "— les comptes admin/coordonnateur se gèrent depuis « Comptes utilisateurs ».",
         )
-    return await user_service.admin_reset_password(db, user_id, body.new_password, body.force_change)
+    return await user_service.admin_reset_password(
+        db, user_id, body.new_password, body.force_change, current_user, _ROLES_TERRAIN
+    )

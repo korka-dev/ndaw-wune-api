@@ -23,14 +23,22 @@ ALLOWED_AUDIO_EXTENSIONS = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".caf"}
 
 
 async def read_upload_capped(file: UploadFile, *, max_size: int = MAX_UPLOAD_SIZE_BYTES) -> bytes:
-    """Lit le contenu d'un UploadFile en rejetant tout fichier dépassant max_size (413)."""
-    content = await file.read()
-    if len(content) > max_size:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Fichier trop volumineux (max {max_size // (1024 * 1024)} Mo).",
-        )
-    return content
+    """Lit le contenu d'un UploadFile par blocs et s'arrête (413) dès que max_size
+    est dépassé — sans jamais charger un fichier démesuré en entier en mémoire."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_size:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Fichier trop volumineux (max {max_size // (1024 * 1024)} Mo).",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def check_extension_allowed(filename: str, allowed: set[str]) -> None:

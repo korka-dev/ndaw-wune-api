@@ -18,10 +18,12 @@ import logging
 import uuid
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.langue import canonical_langue
+from app.models.eleve import Eleve
 from app.models.school import School
 from app.models.user import User, UserRole, UserStatus
 from app.services.school_service import get_matching_school_ids
@@ -121,3 +123,46 @@ async def resolve_supervisor_langue(db: AsyncSession, supervisor: User) -> Optio
             supervisor.id, ", ".join(sorted(valeurs)),
         )
     return None
+
+
+async def filter_supervised_eleve_ids(
+    db: AsyncSession, supervisor: User, eleve_ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Parmi `eleve_ids`, ceux qui appartiennent à une classe d'un enseignant
+    supervisé par ce superviseur (même école, même classe).
+
+    Sert de contrôle d'accès pour toute écriture portant sur des élèves :
+    un identifiant d'élève deviné ou observé ailleurs ne doit pas permettre
+    d'enregistrer une évaluation hors du périmètre du superviseur.
+    """
+    if not eleve_ids:
+        return set()
+    teacher_ids = await get_supervised_teacher_ids(db, supervisor)
+    if not teacher_ids:
+        return set()
+    teachers = (
+        await db.execute(
+            select(User).where(User.id.in_(teacher_ids)).options(selectinload(User.school))
+        )
+    ).scalars().all()
+
+    conditions = []
+    for t in teachers:
+        if not (t.school_id and t.school and t.classes):
+            continue
+        school_ids = await get_matching_school_ids(db, t.school)
+        classes_norm = [" ".join(c.strip().split()).lower() for c in t.classes]
+        conditions.append(
+            and_(
+                Eleve.school_id.in_(school_ids),
+                func.lower(func.regexp_replace(Eleve.classe, r"\s+", " ", "g")).in_(classes_norm),
+            )
+        )
+    if not conditions:
+        return set()
+    rows = (
+        await db.execute(
+            select(Eleve.id).where(Eleve.id.in_(eleve_ids), or_(*conditions))
+        )
+    ).scalars().all()
+    return set(rows)

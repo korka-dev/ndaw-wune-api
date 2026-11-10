@@ -44,11 +44,17 @@ services:
           redis-server --maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy allkeys-lru;
         fi
       "
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     ports:
       # Lié à 127.0.0.1 uniquement — même raisonnement que pour Postgres.
+      # Le port INTERNE reste 6379 ; REDIS_PORT ne change que le port publié sur l'hôte.
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      # Authentifié si un mot de passe est défini, sinon requête simple.
+      test:
+        - CMD-SHELL
+        - 'if [ -n "$$REDIS_PASSWORD" ]; then redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping; else redis-cli ping; fi | grep -q PONG'
       interval: 10s
       timeout: 3s
       retries: 5
@@ -64,7 +70,9 @@ services:
     environment:
       # Surcharge pour utiliser les noms de service Docker (réseau interne)
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB}
-      REDIS_URL:    redis://redis:${REDIS_PORT:-6379}/${REDIS_DB:-0}
+      # Port interne fixe (6379) ; mot de passe transmis au backend s'il est défini
+      # (un mot de passe vide est ignoré par le client Redis).
+      REDIS_URL:    redis://:${REDIS_PASSWORD:-}@redis:6379/${REDIS_DB:-0}
     ports:
       # Lié à 127.0.0.1 uniquement — le trafic public passe par Caddy/Nginx
       # en reverse proxy sur le VPS (port 80/443), pas directement sur 8000.

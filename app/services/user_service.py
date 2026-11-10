@@ -74,6 +74,50 @@ async def get_by_id(db: AsyncSession, user_id: uuid.UUID) -> User:
     return user
 
 
+
+def assert_can_manage(
+    actor: User,
+    target: User,
+    allowed_roles: Sequence[UserRole],
+    *,
+    evaluateur_only: bool = False,
+) -> None:
+    """
+    Contrôle acteur / cible / opération pour les routes de gestion de comptes.
+
+    - La cible doit avoir un des rôles attendus par la route (sinon 404 : on ne
+      révèle pas l'existence d'un compte d'un autre type).
+    - Un compte admin n'est jamais modifiable par ces routes.
+    - Un compte coordonnateur (hors évaluateur) n'est géré que par un admin.
+    """
+    if target.role not in allowed_roles or target.role == UserRole.admin:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Utilisateur introuvable.")
+    if evaluateur_only and target.title != "evaluateur":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Utilisateur introuvable.")
+    if (
+        target.role == UserRole.coordonnateur
+        and target.title != "evaluateur"
+        and actor.role != UserRole.admin
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seul un administrateur peut gérer ce compte.",
+        )
+
+
+async def get_managed(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    actor: User,
+    allowed_roles: Sequence[UserRole],
+    *,
+    evaluateur_only: bool = False,
+) -> User:
+    user = await get_by_id(db, user_id)
+    assert_can_manage(actor, user, allowed_roles, evaluateur_only=evaluateur_only)
+    return user
+
+
 async def list_by_role(
     db: AsyncSession,
     role: UserRole,
@@ -115,6 +159,8 @@ async def create_user(
     - Si aucun mot de passe n'est fourni, on applique le mot de passe par défaut.
     - must_change_password est toujours True à la création (premier login obligatoire).
     """
+    if body.email:
+        body = body.model_copy(update={"email": body.email.strip().lower()})
     await _assert_unique_credentials(db, body.email, body.phone)
 
     password = body.password if body.password else _DEFAULT_PASSWORD
@@ -134,10 +180,21 @@ async def create_user(
     return user
 
 
-async def update_user(db: AsyncSession, user_id: uuid.UUID, body: UserUpdate) -> User:
+async def update_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    body: UserUpdate,
+    actor: Optional[User] = None,
+    allowed_roles: Optional[Sequence[UserRole]] = None,
+    evaluateur_only: bool = False,
+) -> User:
     user = await get_by_id(db, user_id)
+    if actor is not None and allowed_roles is not None:
+        assert_can_manage(actor, user, allowed_roles, evaluateur_only=evaluateur_only)
 
     data = body.model_dump(exclude_none=True)
+    if data.get("email"):
+        data["email"] = data["email"].strip().lower()
     email = data.get("email")
     phone = data.get("phone")
     if email or phone:
@@ -218,6 +275,8 @@ async def admin_reset_password(
     user_id: uuid.UUID,
     new_password: str,
     force_change: bool = False,
+    actor: Optional[User] = None,
+    allowed_roles: Optional[Sequence[UserRole]] = None,
 ) -> User:
     """
     Définit un nouveau mot de passe pour un compte, depuis le dashboard admin
@@ -229,6 +288,8 @@ async def admin_reset_password(
     survivre au changement.
     """
     user = await get_by_id(db, user_id)
+    if actor is not None and allowed_roles is not None:
+        assert_can_manage(actor, user, allowed_roles)
     user.password_hash        = hash_password(new_password)
     user.must_change_password = force_change
     user.tokens_valid_from     = datetime.now(timezone.utc).replace(microsecond=0)
@@ -237,19 +298,38 @@ async def admin_reset_password(
     return user
 
 
-async def toggle_status(db: AsyncSession, user_id: uuid.UUID) -> User:
+async def toggle_status(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    actor: Optional[User] = None,
+    allowed_roles: Optional[Sequence[UserRole]] = None,
+    evaluateur_only: bool = False,
+) -> User:
     user = await get_by_id(db, user_id)
+    if actor is not None and allowed_roles is not None:
+        assert_can_manage(actor, user, allowed_roles, evaluateur_only=evaluateur_only)
+    if actor is not None and user.id == actor.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Vous ne pouvez pas désactiver votre propre compte.")
     user.status = UserStatus.inactif if user.status == UserStatus.actif else UserStatus.actif
     await db.flush()
     await db.refresh(user, attribute_names=["school"])
     return user
 
 
-async def delete_user(db: AsyncSession, user_id: uuid.UUID, requestor_id: uuid.UUID) -> None:
+async def delete_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    requestor_id: uuid.UUID,
+    actor: Optional[User] = None,
+    allowed_roles: Optional[Sequence[UserRole]] = None,
+    evaluateur_only: bool = False,
+) -> None:
     if user_id == requestor_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Vous ne pouvez pas supprimer votre propre compte.",
         )
     user = await get_by_id(db, user_id)
+    if actor is not None and allowed_roles is not None:
+        assert_can_manage(actor, user, allowed_roles, evaluateur_only=evaluateur_only)
     await db.delete(user)

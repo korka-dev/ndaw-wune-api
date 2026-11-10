@@ -22,7 +22,11 @@ from app.models.evaluation_eleve import EvaluationEleve
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
 from app.services.school_service import get_matching_school_ids
-from app.services.supervisor_service import get_supervised_teacher_ids, is_supervised_teacher
+from app.services.supervisor_service import (
+    filter_supervised_eleve_ids,
+    get_supervised_teacher_ids,
+    is_supervised_teacher,
+)
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -272,17 +276,14 @@ async def submit_evaluations(
     active_session = session_result.scalars().first()
     session_id = active_session.id if active_session else None
 
-    now = datetime.now(timezone.utc)
-    created = updated = 0
-
+    # ── Validation complète AVANT toute écriture (aucune mutation partielle) ──
+    parsed: list[tuple[uuid.UUID, date, str, EvaluationIn]] = []
     for ev in body.evaluations:
-        # Validation
         if ev.resultat not in RESULTATS_VALIDES:
             raise HTTPException(
                 status_code=422,
                 detail=f"Résultat invalide : '{ev.resultat}'. Valeurs : {sorted(RESULTATS_VALIDES)}",
             )
-        resultat_norm = _EQUIVALENCES_RESULTAT[ev.resultat]
         try:
             eleve_uuid = uuid.UUID(ev.eleve_id)
         except ValueError:
@@ -291,7 +292,20 @@ async def submit_evaluations(
             eval_date = date.fromisoformat(ev.date_eval)
         except ValueError:
             raise HTTPException(status_code=422, detail=f"date_eval invalide : {ev.date_eval}")
+        parsed.append((eleve_uuid, eval_date, _EQUIVALENCES_RESULTAT[ev.resultat], ev))
 
+    # Chaque élève doit appartenir à une classe supervisée par ce superviseur.
+    allowed = await filter_supervised_eleve_ids(db, current_user, list({p[0] for p in parsed}))
+    if any(p[0] not in allowed for p in parsed):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Un ou plusieurs élèves ne relèvent pas de votre périmètre de supervision.",
+        )
+
+    now = datetime.now(timezone.utc)
+    created = updated = 0
+
+    for eleve_uuid, eval_date, resultat_norm, ev in parsed:
         # Chercher doublon existant
         existing = (await db.execute(
             select(EvaluationEleve).where(

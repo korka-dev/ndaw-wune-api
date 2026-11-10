@@ -3,22 +3,23 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.redis import invalidate_sync_caches_after_commit
 from app.core.security import decode_token, is_token_revoked
 from app.models.user import User, UserRole, UserStatus
 
 bearer_scheme = HTTPBearer(auto_error=True)
 
 
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+async def _authenticate(
+    credentials: HTTPAuthorizationCredentials,
+    db: AsyncSession,
 ) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -57,6 +58,37 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Compte désactivé. Contactez l'administrateur.",
+        )
+    return user
+
+
+async def get_current_user_pending_ok(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Utilisateur authentifié, MÊME s'il doit encore changer son mot de passe.
+
+    Réservé aux routes nécessaires à l'activation du compte : profil
+    (/auth/me), changement de mot de passe et déconnexion.
+    """
+    return await _authenticate(credentials, db)
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Utilisateur authentifié ET activé.
+
+    Un compte dont le mot de passe temporaire n'a pas encore été remplacé
+    (must_change_password) est refusé ici : l'activation est imposée côté
+    serveur, pas seulement par les écrans de l'application.
+    """
+    user = await _authenticate(credentials, db)
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PASSWORD_CHANGE_REQUIRED",
         )
     return user
 
@@ -107,8 +139,17 @@ async def require_mobile_user(
     return current_user
 
 
+async def sync_invalidation_on_admin_write(request: Request, db: Annotated[AsyncSession, Depends(get_db)]) -> None:
+    """Toute écriture admin (POST/PUT/PATCH/DELETE) invalide le cache de sync des
+    mobiles APRÈS le commit — les listes (élèves, classes, affectations, planning…)
+    ne restent plus obsolètes jusqu'à l'expiration du TTL."""
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        invalidate_sync_caches_after_commit(db)
+
+
 # ── Aliases typés pour injection dans les routes ──────────────────────────────
 CurrentUser      = Annotated[User, Depends(get_current_user)]
+CurrentUserPendingOk = Annotated[User, Depends(get_current_user_pending_ok)]
 AdminUser        = Annotated[User, Depends(require_admin)]
 TeacherUser      = Annotated[User, Depends(require_enseignant)]
 SuperviseurUser  = Annotated[User, Depends(require_superviseur)]

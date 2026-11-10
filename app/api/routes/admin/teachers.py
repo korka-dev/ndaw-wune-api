@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select
 
 from app.core.deps import AdminUser, DB
+from app.core.upload_utils import read_upload_capped
 from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.core.security import hash_password
@@ -104,7 +105,7 @@ async def export_teachers_xlsx(db: DB, _: AdminUser, fields: Optional[str] = Non
 
 @router.post("/import/csv")
 async def import_teachers_csv(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
-    content = (await file.read()).decode("utf-8-sig")
+    content = (await read_upload_capped(file)).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(content))
     headers = {f.lower().strip() for f in (reader.fieldnames or [])}
     if "nom" not in headers:
@@ -151,7 +152,7 @@ async def import_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
       4. Chargement des enseignants existants en 1 requête
       5. Création des nouveaux enseignants en lot (flush toutes les 200 entités)
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:
@@ -328,7 +329,7 @@ async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(.
     - Non trouvé     → crée l'enseignant (téléphone obligatoire)
     - Conflit phone unique → signalé dans errors, ligne ignorée sans planter le reste
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:
@@ -491,13 +492,13 @@ async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(.
 # ── Routes paramétrées — après les routes fixes ──────────────────────────────
 
 @router.get("/{teacher_id}", response_model=UserResponse)
-async def get_teacher(teacher_id: uuid.UUID, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.get_by_id(db, teacher_id)
+async def get_teacher(teacher_id: uuid.UUID, db: DB, current_user: AdminUser) -> UserResponse:
+    return await user_service.get_managed(db, teacher_id, current_user, (UserRole.enseignant,))
 
 
 @router.patch("/{teacher_id}", response_model=UserResponse)
-async def update_teacher(teacher_id: uuid.UUID, body: UserUpdate, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.update_user(db, teacher_id, body)
+async def update_teacher(teacher_id: uuid.UUID, body: UserUpdate, db: DB, current_user: AdminUser) -> UserResponse:
+    return await user_service.update_user(db, teacher_id, body, current_user, (UserRole.enseignant,))
 
 
 @router.delete("", status_code=status.HTTP_200_OK)
@@ -517,8 +518,9 @@ async def bulk_delete_teachers(
     # Empêcher l'auto-suppression
     ids_filtered = [i for i in ids if i != current_user.id]
     from app.models.user import User
+    # Seuls les comptes enseignants sont supprimables par cette route
     result = await db.execute(
-        delete(User).where(User.id.in_(ids_filtered))
+        delete(User).where(User.id.in_(ids_filtered), User.role == UserRole.enseignant)
     )
     await db.commit()
     return {"deleted": result.rowcount}
@@ -526,10 +528,10 @@ async def bulk_delete_teachers(
 
 @router.delete("/{teacher_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_teacher(teacher_id: uuid.UUID, db: DB, current_user: AdminUser) -> Response:
-    await user_service.delete_user(db, teacher_id, current_user.id)
+    await user_service.delete_user(db, teacher_id, current_user.id, current_user, (UserRole.enseignant,))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{teacher_id}/toggle-status", response_model=UserResponse)
-async def toggle_status(teacher_id: uuid.UUID, db: DB, _: AdminUser) -> UserResponse:
-    return await user_service.toggle_status(db, teacher_id)
+async def toggle_status(teacher_id: uuid.UUID, db: DB, current_user: AdminUser) -> UserResponse:
+    return await user_service.toggle_status(db, teacher_id, current_user, (UserRole.enseignant,))

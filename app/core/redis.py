@@ -63,3 +63,9 @@ async def invalidate_sync_caches() -> None:
             "Les mobiles recevront les nouvelles données au plus tard à l'expiration du TTL.",
             exc,
         )
+
+
+def invalidate_sync_caches_after_commit(db) -> None:
+    """Programme l'invalidation des caches de sync une fois la transaction de la
+    requête validée (hook exécuté par get_db après le commit). Idempotent."""
+    db.info.setdefault("after_commit", {})["sync_caches"] = invalidate_sync_caches

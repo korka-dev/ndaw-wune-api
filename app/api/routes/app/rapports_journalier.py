@@ -24,7 +24,30 @@ async def submit_rapport_journalier(
     db: DB,
 ) -> RapportJournalierResponse:
     """Soumet un rapport journalier depuis l'app mobile (enseignant ou superviseur, online/offline)."""
-    rapport = RapportJournalier(teacher_id=current_user.id, **body.model_dump())
+    data = body.model_dump()
+
+    # Rejeu réseau : si la réponse d'un envoi précédent a été perdue, l'app renvoie
+    # le même rapport. Un rapport strictement identique du même auteur (même date,
+    # semaine, jour, école, contenu) est renvoyé tel quel au lieu d'être dupliqué.
+    doublon = (await db.execute(
+        select(RapportJournalier).where(
+            RapportJournalier.teacher_id == current_user.id,
+            RapportJournalier.date_rapport == data["date_rapport"],
+            RapportJournalier.semaine == data["semaine"],
+            RapportJournalier.jour_cours == data["jour_cours"],
+            RapportJournalier.ecole == data["ecole"],
+            RapportJournalier.nom_tuteur == data["nom_tuteur"],
+            RapportJournalier.nb_absences == data["nb_absences"],
+            RapportJournalier.absents.is_not_distinct_from(data["absents"]),
+            RapportJournalier.difficultes == data["difficultes"],
+            RapportJournalier.commentaires.is_not_distinct_from(data["commentaires"]),
+            RapportJournalier.reponses_questions.is_not_distinct_from(data["reponses_questions"]),
+        ).limit(1)
+    )).scalar_one_or_none()
+    if doublon is not None:
+        return doublon
+
+    rapport = RapportJournalier(teacher_id=current_user.id, **data)
     db.add(rapport)
     await db.flush()
     await db.refresh(rapport)

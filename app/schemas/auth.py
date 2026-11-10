@@ -20,6 +20,9 @@ def _normalize_phone(raw: str) -> str:
     return digits
 
 
+MIN_PASSWORD_LENGTH = 8
+
+
 class LoginRequest(BaseModel):
     identifier: str    # e-mail OU numéro de téléphone
     password:   str
@@ -87,6 +90,11 @@ class ChangePasswordRequest(BaseModel):
     def password_strength(cls, v: str) -> str:
         if not v:
             raise ValueError("Le mot de passe ne peut pas être vide.")
+        # Politique minimale commune à tous les chemins (changement, réinitialisation,
+        # définition par un admin) : 8 caractères. Les règles de composition
+        # (majuscule, chiffre…) restent à faire valider par ARED avant d'être imposées.
+        if len(v) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Le mot de passe doit contenir au moins {MIN_PASSWORD_LENGTH} caractères.")
         return v
 
     @field_validator("confirm_password", mode="after")
@@ -116,6 +124,11 @@ class ResetPasswordRequest(BaseModel):
     def password_strength(cls, v: str) -> str:
         if not v:
             raise ValueError("Le mot de passe ne peut pas être vide.")
+        # Politique minimale commune à tous les chemins (changement, réinitialisation,
+        # définition par un admin) : 8 caractères. Les règles de composition
+        # (majuscule, chiffre…) restent à faire valider par ARED avant d'être imposées.
+        if len(v) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Le mot de passe doit contenir au moins {MIN_PASSWORD_LENGTH} caractères.")
         return v
 
     @field_validator("confirm_password", mode="after")

@@ -67,11 +67,13 @@ class TestChangePasswordRequest:
             ChangePasswordRequest(new_password="Ab1", confirm_password="Ab1")
         assert "8" in str(exc_info.value)
 
+    @pytest.mark.skip(reason="Règle de composition (majuscule) à faire valider par ARED — fiche APP-08")
     def test_no_uppercase_raises(self):
         with pytest.raises(ValidationError) as exc_info:
             ChangePasswordRequest(new_password="nouveaumdp1", confirm_password="nouveaumdp1")
         assert "majuscule" in str(exc_info.value).lower()
 
+    @pytest.mark.skip(reason="Règle de composition (chiffre) à faire valider par ARED — fiche APP-08")
     def test_no_digit_raises(self):
         with pytest.raises(ValidationError) as exc_info:
             ChangePasswordRequest(new_password="NouveauMdpSans", confirm_password="NouveauMdpSans")

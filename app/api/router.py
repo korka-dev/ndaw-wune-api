@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.core.deps import sync_invalidation_on_admin_write
 
 from app.api.routes import auth
 from app.api.routes.admin import (
@@ -36,40 +37,42 @@ from app.api.routes.app import (
 api_router = APIRouter(prefix="/api/v1")
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
+_ADMIN_DEPS = [Depends(sync_invalidation_on_admin_write)]
+
 api_router.include_router(auth.router)
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
-api_router.include_router(users.router,                    prefix="/admin")
-api_router.include_router(sessions.router,                 prefix="/admin")
-api_router.include_router(teachers.router,                 prefix="/admin")
-api_router.include_router(schools.router,                  prefix="/admin")
-api_router.include_router(planning.router,                 prefix="/admin")
-api_router.include_router(admin_rapports_journalier.router, prefix="/admin")  # avant rapports pour éviter conflit /{rapport_id}
-api_router.include_router(rapports.router,                 prefix="/admin")
-api_router.include_router(superviseurs.router,             prefix="/admin")
-api_router.include_router(evaluateurs.router,              prefix="/admin")
-api_router.include_router(eleves.router,                   prefix="/admin")
-api_router.include_router(classes.router,                  prefix="/admin")
-api_router.include_router(suivi_seances.router,            prefix="/admin")
-api_router.include_router(suivi_superviseurs.router,       prefix="/admin")
-api_router.include_router(suivi_evaluations.router,        prefix="/admin")
-api_router.include_router(suivi_plannings.router,          prefix="/admin")
-api_router.include_router(ressources.router,               prefix="/admin")
-api_router.include_router(rapport_questions.router,         prefix="/admin")
-api_router.include_router(rapport_difficultes.router,        prefix="/admin")
-api_router.include_router(rapport_libelles.router,           prefix="/admin")
-api_router.include_router(evaluation_competences.router,    prefix="/admin")
-api_router.include_router(audit_logs.router,                prefix="/admin")
-api_router.include_router(dashboard_stats.router,           prefix="/admin")  # GET /admin/dashboard/stats
-api_router.include_router(evaluation_sujets.router,         prefix="/admin")
-api_router.include_router(evaluation_docs.router,           prefix="/admin")
-api_router.include_router(admin_usage_logs.router,           prefix="/admin")  # GET /admin/usage-logs
-api_router.include_router(admin_remarques.router,            prefix="/admin")  # GET /admin/remarques
-api_router.include_router(rapport_difficulte_resolutions.router, prefix="/admin")  # PATCH /admin/rapport-difficulte-resolutions/{id}/resolve
-api_router.include_router(progression_configs.router,        prefix="/admin")  # /admin/progression-configs
-api_router.include_router(admin_eleve_remplacements.router,  prefix="/admin")  # GET /admin/remplacements
-api_router.include_router(admin_import_export.router,         prefix="/admin")  # GET /admin/import-export/export · POST /admin/import-export/import
-api_router.include_router(admin_comptes_terrain.router,       prefix="/admin")  # /admin/comptes-terrain — tuteurs & superviseurs, réinitialisation mdp
+api_router.include_router(users.router,                    prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(sessions.router,                 prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(teachers.router,                 prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(schools.router,                  prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(planning.router,                 prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(admin_rapports_journalier.router, prefix="/admin", dependencies=_ADMIN_DEPS)  # avant rapports pour éviter conflit /{rapport_id}
+api_router.include_router(rapports.router,                 prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(superviseurs.router,             prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(evaluateurs.router,              prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(eleves.router,                   prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(classes.router,                  prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(suivi_seances.router,            prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(suivi_superviseurs.router,       prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(suivi_evaluations.router,        prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(suivi_plannings.router,          prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(ressources.router,               prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(rapport_questions.router,         prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(rapport_difficultes.router,        prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(rapport_libelles.router,           prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(evaluation_competences.router,    prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(audit_logs.router,                prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(dashboard_stats.router,           prefix="/admin", dependencies=_ADMIN_DEPS)  # GET /admin/dashboard/stats
+api_router.include_router(evaluation_sujets.router,         prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(evaluation_docs.router,           prefix="/admin", dependencies=_ADMIN_DEPS)
+api_router.include_router(admin_usage_logs.router,           prefix="/admin", dependencies=_ADMIN_DEPS)  # GET /admin/usage-logs
+api_router.include_router(admin_remarques.router,            prefix="/admin", dependencies=_ADMIN_DEPS)  # GET /admin/remarques
+api_router.include_router(rapport_difficulte_resolutions.router, prefix="/admin", dependencies=_ADMIN_DEPS)  # PATCH /admin/rapport-difficulte-resolutions/{id}/resolve
+api_router.include_router(progression_configs.router,        prefix="/admin", dependencies=_ADMIN_DEPS)  # /admin/progression-configs
+api_router.include_router(admin_eleve_remplacements.router,  prefix="/admin", dependencies=_ADMIN_DEPS)  # GET /admin/remplacements
+api_router.include_router(admin_import_export.router,         prefix="/admin", dependencies=_ADMIN_DEPS)  # GET /admin/import-export/export · POST /admin/import-export/import
+api_router.include_router(admin_comptes_terrain.router,       prefix="/admin", dependencies=_ADMIN_DEPS)  # /admin/comptes-terrain — tuteurs & superviseurs, réinitialisation mdp
 
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")

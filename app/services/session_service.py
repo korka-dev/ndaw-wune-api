@@ -7,6 +7,7 @@ import uuid
 from typing import Sequence
 
 from fastapi import HTTPException, status
+from app.core.redis import invalidate_sync_caches_after_commit
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +40,7 @@ async def create_session(db: AsyncSession, body: SessionCreate) -> ProgramSessio
     db.add(session)
     await db.flush()
     await db.refresh(session)
+    invalidate_sync_caches_after_commit(db)
     return session
 
 
@@ -48,12 +50,14 @@ async def update_session(db: AsyncSession, session_id: uuid.UUID, body: SessionU
         setattr(session, field, value)
     await db.flush()
     await db.refresh(session)
+    invalidate_sync_caches_after_commit(db)
     return session
 
 
 async def delete_session(db: AsyncSession, session_id: uuid.UUID) -> None:
     session = await get_by_id(db, session_id)
     await db.delete(session)
+    invalidate_sync_caches_after_commit(db)
 
 
 async def activate_session(db: AsyncSession, session_id: uuid.UUID) -> ProgramSession:
@@ -76,6 +80,7 @@ async def activate_session(db: AsyncSession, session_id: uuid.UUID) -> ProgramSe
     )
     await db.flush()
     await db.refresh(session)
+    invalidate_sync_caches_after_commit(db)
     return session
 
 
@@ -111,6 +116,7 @@ async def assign_teachers(
         db.add(TeacherSession(teacher_id=tid, session_id=session_id))
 
     await db.flush()
+    invalidate_sync_caches_after_commit(db)
 
 
 async def list_session_teachers(

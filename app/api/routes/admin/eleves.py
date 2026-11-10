@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
+from app.core.upload_utils import read_upload_capped
 from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.eleve import Eleve
@@ -440,7 +441,7 @@ async def import_eleves(db: DB, _: AdminUser, file: UploadFile = File(...)) -> d
     Colonnes acceptées (insensible à la casse) :
       nom / prenom / sexe / date_naissance / classe / statut
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     filename = (file.filename or "").lower()
     mime = (file.content_type or "").lower()
 
@@ -476,7 +477,7 @@ async def reimport_eleves_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
     - Élève existant (même nom + prénom + classe) → ignoré
     - Nouvel élève → créé
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:
@@ -572,7 +573,7 @@ async def reimport_eleves_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
 @router.post("/import/csv")
 async def import_eleves_csv(db: DB, _: AdminUser, file: UploadFile = File(...)) -> dict:
     """Endpoint historique conservé pour compatibilité. Préférer /import."""
-    content = await file.read()
+    content = await read_upload_capped(file)
     rows, errors = _parse_csv(content)
     imported = await _bulk_insert(db, rows)
     return {"imported": imported, "errors": errors}
@@ -588,7 +589,7 @@ async def import_eleves_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...))
     Lie automatiquement chaque élève à son école via la colonne SCHOOL.
     Les écoles doivent exister au préalable (sinon l'élève est ignoré).
     """
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception:

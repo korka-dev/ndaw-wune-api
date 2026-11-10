@@ -41,6 +41,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
+from app.core.export_utils import sanitize_cell
+from app.core.upload_utils import read_upload_capped
 from app.core.security import hash_password
 from app.models.eleve import Eleve
 from app.models.school import School
@@ -106,7 +108,7 @@ async def export_all(db: DB, _: AdminUser) -> StreamingResponse:
         tut = tuteur_for(school.id, e.classe) if school else None
         niveau = niveau_by_class.get((school.id, e.classe)) if school else None
 
-        ws.append([
+        ws.append([sanitize_cell(v) for v in [
             school.region if school else None,
             school.city if school else None,
             school.code_ecole if school else None,
@@ -128,7 +130,7 @@ async def export_all(db: DB, _: AdminUser) -> StreamingResponse:
             e.groupe_lecture,
             e.groupe_maths,
             e.statut,
-        ])
+        ]])
 
     for i, col in enumerate(COLUMNS, start=1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = max(12, min(28, len(col) + 4))
@@ -191,7 +193,7 @@ def _unique_placeholder_phone(taken: set[str]) -> str:
 
 @router.post("/import", response_model=ImportSummary)
 async def import_all(db: DB, _: AdminUser, file: UploadFile = File(...)) -> ImportSummary:
-    content = await file.read()
+    content = await read_upload_capped(file)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
     except Exception:

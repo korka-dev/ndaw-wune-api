@@ -49,6 +49,14 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
+            # Actions à exécuter APRÈS le commit (ex. invalidation du cache de
+            # synchronisation) : avant le commit, un /sync concurrent pourrait
+            # remettre en cache l'ancien état.
+            for hook in session.info.pop("after_commit", {}).values():
+                try:
+                    await hook()
+                except Exception:  # un échec de hook ne doit jamais défaire la requête
+                    pass
         except Exception:
             await session.rollback()
             raise

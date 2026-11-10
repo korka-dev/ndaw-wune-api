@@ -236,7 +236,9 @@ async def set_tirages_presence(
 
     allowed_pairs = await _get_supervisor_school_classe_pairs(db, current_user)
 
-    updated = 0
+    # Validation complète avant toute écriture : un tirage hors périmètre
+    # (ou inexistant) fait refuser tout le lot, sans aucune mutation.
+    a_modifier: list[tuple[EvaluationTirage, bool]] = []
     for entry in body.entries:
         try:
             tid = uuid.UUID(entry.tirage_id)
@@ -248,18 +250,14 @@ async def set_tirages_presence(
             .options(selectinload(EvaluationTirage.eleve))
             .where(EvaluationTirage.id == tid)
         )).scalar_one_or_none()
-        if tirage is None or tirage.eleve is None:
-            continue
+        e = tirage.eleve if tirage is not None else None
+        if e is None or not any(e.school_id == sid and e.classe == cls for sid, cls in allowed_pairs):
+            raise HTTPException(status_code=404, detail=f"Tirage introuvable : {entry.tirage_id}")
+        a_modifier.append((tirage, entry.present))
 
-        # Ignore silencieusement les tirages hors du périmètre de ce
-        # superviseur (élève d'une classe non supervisée) — évite qu'un
-        # tirage_id deviné/observé ailleurs permette d'écrire des données
-        # sur un élève dont on n'a pas la charge.
-        e = tirage.eleve
-        if not any(e.school_id == sid and e.classe == cls for sid, cls in allowed_pairs):
-            continue
-
-        tirage.present = entry.present
+    updated = 0
+    for tirage, present in a_modifier:
+        tirage.present = present
         tirage.superviseur_id = current_user.id
         tirage.updated_at = datetime.now(timezone.utc)
         updated += 1
@@ -288,15 +286,18 @@ async def submit_tirage(
             detail="Résultat invalide : 'reussi', 'intermediaire' ou 'pas_reussi'.",
         )
 
-    # Sauvegarde de l'audio
+    # Sauvegarde de l'audio (propre à CETTE observation)
+    nouvel_audio: Optional[str] = None
     if audio and audio.filename:
         check_extension_allowed(audio.filename, ALLOWED_AUDIO_EXTENSIONS)
         content = await read_upload_capped(audio)
         suffix = Path(audio.filename).suffix or ".m4a"
-        audio_filename = f"eval_audio_{tirage_id}{suffix}"
+        # Nom unique par envoi : une réévaluation ne remplace jamais l'audio antérieur.
+        audio_filename = f"eval_audio_{tirage_id}_{uuid.uuid4().hex}{suffix}"
         uploads_dir = Path(settings.UPLOADS_DIR)
         uploads_dir.mkdir(parents=True, exist_ok=True)
         (uploads_dir / audio_filename).write_bytes(content)
+        nouvel_audio = audio_filename
         tirage.audio_filename = audio_filename
 
     now = datetime.now(timezone.utc)
@@ -321,8 +322,8 @@ async def submit_tirage(
         existante.commentaire    = commentaire_net
         existante.superviseur_id = current_user.id
         existante.updated_at     = now
-        if tirage.audio_filename:
-            existante.audio_filename = tirage.audio_filename
+        if nouvel_audio:
+            existante.audio_filename = nouvel_audio
     else:
         db.add(EvaluationResultat(
             id=uuid.uuid4(),
@@ -331,7 +332,7 @@ async def submit_tirage(
             date_eval=aujourdhui,
             resultat=resultat,
             commentaire=commentaire_net,
-            audio_filename=tirage.audio_filename,
+            audio_filename=nouvel_audio,
             created_at=now,
             updated_at=now,
         ))
@@ -349,10 +350,30 @@ async def submit_tirage(
 
 
 @router.get("/evaluation-audio/{filename}")
-async def get_audio(filename: str, db: DB, _: SuperviseurUser):
-    """Sert un fichier audio d'évaluation."""
+async def get_audio(filename: str, db: DB, current_user: SuperviseurUser):
+    """Sert un fichier audio d'évaluation, uniquement au superviseur dont le
+    périmètre couvre l'élève concerné (404 sinon, pour ne pas confirmer son existence)."""
+    import mimetypes
     from fastapi.responses import FileResponse
-    path = Path(settings.UPLOADS_DIR) / filename
-    if not path.exists() or not filename.startswith("eval_audio_"):
+
+    if Path(filename).name != filename or not filename.startswith("eval_audio_"):
         raise HTTPException(status_code=404, detail="Audio introuvable.")
-    return FileResponse(str(path), media_type="audio/mpeg", filename=filename)
+
+    # Retrouver le tirage rattaché à ce fichier (résultat historique ou dernier état).
+    tirage_id = (await db.execute(
+        select(EvaluationResultat.tirage_id).where(EvaluationResultat.audio_filename == filename).limit(1)
+    )).scalar_one_or_none()
+    if tirage_id is None:
+        tirage_id = (await db.execute(
+            select(EvaluationTirage.id).where(EvaluationTirage.audio_filename == filename).limit(1)
+        )).scalar_one_or_none()
+    if tirage_id is None:
+        raise HTTPException(status_code=404, detail="Audio introuvable.")
+
+    await _get_owned_tirage(db, tirage_id, current_user)  # 404 si hors périmètre
+
+    path = Path(settings.UPLOADS_DIR) / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Audio introuvable.")
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return FileResponse(str(path), media_type=media_type, filename=filename)

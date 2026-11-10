@@ -9,12 +9,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 
-from app.core.deps import CurrentUser, bearer_scheme
+from app.core.deps import CurrentUserPendingOk, bearer_scheme
 from app.core.security import create_token_pair, decode_token, is_token_revoked, revoke_token, verify_password
 
 # Instance locale — le wiring global est dans main.py.
@@ -70,7 +70,7 @@ async def login(request: Request, body: LoginRequest = Body(...), db: AsyncSessi
     result = await db.execute(
         select(User).where(
             or_(
-                User.email == identifier,
+                func.lower(User.email) == identifier,
                 *phone_conditions,
             )
         )
@@ -132,7 +132,7 @@ async def refresh(body: RefreshRequest = Body(...), db: AsyncSession = Depends(g
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(current_user: CurrentUser) -> MeResponse:
+async def me(current_user: CurrentUserPendingOk) -> MeResponse:
     """Retourne le profil de l'utilisateur connecté."""
     return MeResponse.model_validate(current_user)
 
@@ -140,7 +140,7 @@ async def me(current_user: CurrentUser) -> MeResponse:
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
-    current_user: CurrentUser,
+    current_user: CurrentUserPendingOk,
     body: ChangePasswordRequest = Body(...),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
@@ -159,7 +159,7 @@ async def change_password(
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
-    current_user: CurrentUser,
+    current_user: CurrentUserPendingOk,
     body: LogoutRequest = Body(default=LogoutRequest()),
 ) -> Response:
     """
@@ -200,7 +200,7 @@ async def reset_password(
 
     result = await db.execute(
         select(User).where(
-            or_(User.email == identifier, *phone_conditions)
+            or_(func.lower(User.email) == identifier, *phone_conditions)
         )
     )
     user = result.scalar_one_or_none()

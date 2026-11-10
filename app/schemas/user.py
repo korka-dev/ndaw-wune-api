@@ -106,8 +106,8 @@ class SetPasswordRequest(BaseModel):
     @classmethod
     def min_length(cls, v: str) -> str:
         v = v.strip()
-        if len(v) < 6:
-            raise ValueError("Le mot de passe doit contenir au moins 6 caractères.")
+        if len(v) < 8:
+            raise ValueError("Le mot de passe doit contenir au moins 8 caractères.")
         return v
 
 

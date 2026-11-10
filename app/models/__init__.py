@@ -21,3 +21,11 @@ from app.models.rapport_difficulte import RapportDifficulte          # noqa: F40
 from app.models.school_classe import SchoolClasse                   # noqa: F401
 from app.models.usage_log import UsageLog                            # noqa: F401
 from app.models.remarque import Remarque                             # noqa: F401
+# Modèles auparavant absents du registre : sans ces imports, `alembic check` /
+# autogenerate proposait la SUPPRESSION de leurs tables.
+from app.models.evaluation_doc import EvaluationDoc                  # noqa: F401
+from app.models.evaluation_competence import EvaluationCompetence    # noqa: F401
+from app.models.rapport_libelle import RapportLibelle                # noqa: F401
+from app.models.progression_config import ProgressionConfig          # noqa: F401
+from app.models.eleve_remplacement import EleveRemplacement          # noqa: F401
+from app.models.rapport_difficulte_resolution import RapportDifficulteResolution  # noqa: F401
