@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Literal
+from typing import Literal
 import logging
+import uuid
 
 import bcrypt
-from jose import JWTError, jwt
+from jose import jwt
 
 from app.core.config import settings
 
@@ -52,6 +53,9 @@ def create_token(
         "role": role,
         "exp": expire,
         "iat": datetime.now(timezone.utc),
+        # Identifiant unique : deux jetons émis la même seconde restent
+        # distincts (rotation et révocation du refresh token, APP-10).
+        "jti": uuid.uuid4().hex,
     }
     if extra:
         payload.update(extra)
@@ -113,10 +117,22 @@ async def revoke_token(token: str) -> None:
         logger.warning("[Security] Impossible de révoquer le token : %s", exc)
 
 
-async def is_token_revoked(token: str) -> bool:
+class RevocationUnavailable(Exception):
+    """Redis indisponible alors que la vérification de révocation est obligatoire."""
+
+
+async def is_token_revoked(token: str, *, fail_closed: bool = False) -> bool:
     """
     Retourne True si le token est dans la blacklist Redis.
-    En cas d'indisponibilité Redis, retourne False (fail-open : l'authentification continue).
+
+    Politique en cas d'indisponibilité Redis (APP-10), documentée :
+    - jetons d'accès (fail_closed=False) : on laisse passer. Leur durée est
+      courte (ACCESS_TOKEN_EXPIRE_MINUTES) et les révocations par changement ou
+      réinitialisation de mot de passe reposent sur tokens_valid_from, stocké en
+      base, donc toujours appliquées ;
+    - refresh tokens (fail_closed=True) : RevocationUnavailable, la route
+      répond 503 et le client réessaie sans perdre sa session. Un jeton longue
+      durée dont la révocation est invérifiable n'est jamais échangé.
     """
     from app.core.redis import get_redis
     try:
@@ -124,4 +140,39 @@ async def is_token_revoked(token: str) -> bool:
         return await redis.exists(f"{_BLACKLIST_PREFIX}{token}") > 0
     except Exception as exc:
         logger.warning("[Security] Redis indisponible pour vérifier la blacklist : %s", exc)
+        if fail_closed:
+            raise RevocationUnavailable() from exc
         return False
+
+
+_ROTATED_PREFIX = "rotated_refresh:"
+
+
+async def mark_refresh_rotated(token: str, grace_seconds: int) -> bool:
+    """
+    Enregistre l'échange d'un refresh token (rotation, APP-10).
+
+    Retourne True si l'échange est autorisé : premier usage, ou nouvel usage dans
+    le délai de grâce (réponse perdue, requêtes simultanées). False si le jeton a
+    déjà été échangé avant ce délai : il est alors révoqué définitivement.
+    Lève RevocationUnavailable si Redis ne répond pas.
+    """
+    from app.core.redis import get_redis
+    try:
+        payload = decode_token(token)
+        now = int(datetime.now(timezone.utc).timestamp())
+        ttl = max(1, int(payload.get("exp", now + 1)) - now)
+        redis = await get_redis()
+        key = f"{_ROTATED_PREFIX}{token}"
+        if await redis.set(key, str(now), ex=ttl, nx=True):
+            return True
+        first_use = int(await redis.get(key) or now)
+    except RevocationUnavailable:
+        raise
+    except Exception as exc:
+        logger.warning("[Security] Redis indisponible pour la rotation du refresh : %s", exc)
+        raise RevocationUnavailable() from exc
+    if now - first_use <= grace_seconds:
+        return True
+    await revoke_token(token)
+    return False

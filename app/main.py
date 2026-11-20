@@ -11,10 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from jose import JWTError
 from sqlalchemy import select
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
+from app.core.app_version import is_outdated
 from app.core.config import settings
 from app.core.database import engine, AsyncSessionLocal
 from app.core.logging import setup_logging
@@ -50,9 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await engine.dispose()
 
 
-# ── Rate Limiter (protection brute force) ─────────────────────────────────────
-# L'instance est partagée — les routes l'importent via app.state.limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+# ── Rate Limiter (APP-11) ─────────────────────────────────────────────────────
+# Instance unique (Redis, clé utilisateur ou IP) : voir app/core/rate_limit.py.
+from app.core.rate_limit import limiter  # noqa: E402
 
 
 # ── Instance FastAPI ───────────────────────────────────────────────────────────
@@ -73,6 +74,9 @@ from fastapi.exceptions import RequestValidationError
 # ── Wiring du rate limiter ─────────────────────────────────────────────────────
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Applique la limite par défaut à toutes les routes (auparavant déclarée mais
+# jamais câblée, faute de middleware).
+app.add_middleware(SlowAPIMiddleware)
 
 
 # ── Middlewares ────────────────────────────────────────────────────────────────
@@ -82,7 +86,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-App-Version"],
     max_age=600,  # cache preflight 10 min
 )
 
@@ -111,6 +115,23 @@ async def request_logging_middleware(request: Request, call_next):
     # Exposer l'ID dans la réponse pour faciliter le support
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+@app.middleware("http")
+async def app_version_middleware(request: Request, call_next):
+    """APP-46 : refuse (426) une version mobile plus ancienne que MIN_APP_VERSION."""
+    if settings.MIN_APP_VERSION and request.url.path.startswith("/api/v1/app/"):
+        client_version = request.headers.get("x-app-version")
+        if is_outdated(client_version, settings.MIN_APP_VERSION):
+            return JSONResponse(
+                status_code=status.HTTP_426_UPGRADE_REQUIRED,
+                content={
+                    "detail": "APP_UPDATE_REQUIRED",
+                    "min_version": settings.MIN_APP_VERSION,
+                    "latest_version": settings.LATEST_APP_VERSION or settings.MIN_APP_VERSION,
+                },
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -289,7 +310,18 @@ from prometheus_fastapi_instrumentator import Instrumentator  # noqa: E402
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
+@app.get("/api/v1/app-version", tags=["Health"])
+@limiter.exempt
+async def app_version_policy() -> dict:
+    """Politique de version mobile (publique, sans authentification) — APP-46."""
+    return {
+        "min_version": settings.MIN_APP_VERSION or None,
+        "latest_version": settings.LATEST_APP_VERSION or None,
+    }
+
+
 @app.get("/health", tags=["Health"], include_in_schema=False)
+@limiter.exempt
 async def health() -> dict:
     """Endpoint de healthcheck pour Docker et le load balancer."""
     return {"status": "ok", "app": settings.APP_NAME, "env": settings.APP_ENV}

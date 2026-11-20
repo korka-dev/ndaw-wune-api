@@ -15,15 +15,22 @@ middleware d'audit).
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import select
 
 from app.core.deps import DB, TeacherUser
 from app.core.redis import invalidate_sync_caches
 from app.models.audit_log import AuditLog
 from app.models.eleve import Eleve
 from app.models.eleve_remplacement import EleveRemplacement
+from app.models.school import School
 from app.schemas.eleve_remplacement import EleveRemplacementCreate, EleveRemplacementResponse
+from app.services.school_service import get_matching_school_ids
 
 router = APIRouter(prefix="/remplacements", tags=["App — Remplacement élève"])
+
+
+def _norm_classe(c: str | None) -> str:
+    return " ".join((c or "").strip().split()).lower()
 
 
 def _nom_complet(e: Eleve) -> str:
@@ -34,20 +41,44 @@ def _nom_complet(e: Eleve) -> str:
 async def create_remplacement(
     body: EleveRemplacementCreate, current_user: TeacherUser, db: DB
 ) -> EleveRemplacementResponse:
-    ancien = await db.get(Eleve, body.ancien_eleve_id)
-    if ancien is None:
-        raise HTTPException(status_code=404, detail="Élève à remplacer introuvable.")
-    if ancien.school_id != current_user.school_id:
-        raise HTTPException(status_code=403, detail="Cet élève n'appartient pas à votre école.")
+    # APP-24 : même périmètre que la liste reçue par le tuteur (/app/sync) —
+    # écoles de même nom normalisé ET classes affectées au tuteur — appliqué aux
+    # DEUX élèves. Les lignes sont verrouillées (FOR UPDATE) : deux demandes
+    # simultanées ne peuvent pas consommer le même remplaçant.
+    school = await db.get(School, current_user.school_id) if current_user.school_id else None
+    if school is None or not current_user.classes:
+        raise HTTPException(status_code=403, detail="Aucune classe ne vous est affectée.")
+    school_ids = await get_matching_school_ids(db, school)
+    mes_classes = {_norm_classe(c) for c in current_user.classes if c and c.strip()}
+
+    def _dans_mon_perimetre(e: Eleve) -> bool:
+        return e.school_id in school_ids and _norm_classe(e.classe) in mes_classes
+
+    ids = sorted({body.ancien_eleve_id, body.nouveau_eleve_id}, key=str)
+    if len(ids) != 2:
+        raise HTTPException(status_code=400, detail="Le remplaçant doit être un autre élève.")
+    rows = (await db.execute(
+        select(Eleve).where(Eleve.id.in_(ids)).order_by(Eleve.id).with_for_update()
+    )).scalars().all()
+    par_id = {e.id: e for e in rows}
+
+    ancien = par_id.get(body.ancien_eleve_id)
+    if ancien is None or not _dans_mon_perimetre(ancien):
+        # 404 : on ne confirme pas l'existence d'un élève hors périmètre.
+        raise HTTPException(status_code=404, detail="Élève à remplacer introuvable dans vos classes.")
     if (ancien.statut_selection or "").strip().lower() == "remplaçant":
         raise HTTPException(status_code=400, detail="Seul un titulaire peut être remplacé.")
+    if ancien.statut != "actif":
+        raise HTTPException(
+            status_code=409,
+            detail="Cet élève a déjà été remplacé ou n'est plus actif. Synchronisez et réessayez.",
+        )
 
-    nouveau = await db.get(Eleve, body.nouveau_eleve_id)
-    if nouveau is None:
-        raise HTTPException(status_code=404, detail="Remplaçant introuvable.")
+    nouveau = par_id.get(body.nouveau_eleve_id)
+    if nouveau is None or not _dans_mon_perimetre(nouveau):
+        raise HTTPException(status_code=404, detail="Remplaçant introuvable dans vos classes.")
     if (
-        nouveau.school_id != current_user.school_id
-        or nouveau.classe != ancien.classe
+        _norm_classe(nouveau.classe) != _norm_classe(ancien.classe)
         or nouveau.statut != "actif"
         or (nouveau.statut_selection or "").strip().lower() != "remplaçant"
     ):

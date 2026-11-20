@@ -19,7 +19,7 @@ async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
         _redis = aioredis.from_url(
-            settings.REDIS_URL,
+            settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
             max_connections=settings.REDIS_MAX_CONNECTIONS,

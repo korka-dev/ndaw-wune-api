@@ -70,9 +70,10 @@ services:
     environment:
       # Surcharge pour utiliser les noms de service Docker (réseau interne)
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB}
-      # Port interne fixe (6379) ; mot de passe transmis au backend s'il est défini
-      # (un mot de passe vide est ignoré par le client Redis).
-      REDIS_URL:    redis://:${REDIS_PASSWORD:-}@redis:6379/${REDIS_DB:-0}
+      # Port interne fixe (6379). Le mot de passe éventuel est transmis à part
+      # et encodé par l'application dans l'URL effective (APP-43).
+      REDIS_URL:      redis://redis:6379/${REDIS_DB:-0}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     ports:
       # Lié à 127.0.0.1 uniquement — le trafic public passe par Caddy/Nginx
       # en reverse proxy sur le VPS (port 80/443), pas directement sur 8000.

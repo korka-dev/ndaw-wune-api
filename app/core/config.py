@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+from urllib.parse import quote, urlsplit, urlunsplit
 from functools import cached_property
 from typing import List, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +24,10 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60      # 1 h (anciennement 24 h — réduit pour la sécurité)
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30        # 30 jours (inchangé)
+    # Rotation du refresh token (APP-10) : un refresh token déjà échangé reste
+    # accepté pendant ce délai, pour qu'une réponse perdue sur réseau faible
+    # (ou deux onglets) ne déconnecte pas l'utilisateur. Au-delà : refusé.
+    REFRESH_ROTATION_GRACE_SECONDS: int = 60
 
     # ── Base de données ───────────────────────────────────────────────────────
     DATABASE_URL: str
@@ -32,11 +37,26 @@ class Settings(BaseSettings):
 
     # ── Redis ─────────────────────────────────────────────────────────────────
     REDIS_URL: str
+    # Mot de passe Redis transmis à part (APP-43) : il est encodé dans l'URL
+    # effective (settings.redis_url), donc « @ », « : » ou « / » ne la cassent plus.
+    REDIS_PASSWORD: str = ""
     REDIS_MAX_CONNECTIONS: int = 50
     SYNC_CACHE_TTL_SECONDS: int = 3600
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     CORS_ORIGINS: str = "http://localhost:3000"
+
+    # ── Limitation de débit (APP-11) ──────────────────────────────────────────
+    # Limite par utilisateur authentifié (sinon par IP) sur toutes les routes.
+    # Une synchronisation mobile complète fait quelques dizaines de requêtes.
+    RATE_LIMIT_DEFAULT: str = "300/minute"
+    RATE_LIMIT_REFRESH: str = "30/minute"
+
+    # ── Compatibilité mobile (APP-46) ─────────────────────────────────────────
+    # Version minimale de l'app acceptée sur /api/v1/app/* (vide = aucune).
+    MIN_APP_VERSION: str = ""
+    # Dernière version publiée (information affichée par l'app).
+    LATEST_APP_VERSION: str = ""
 
     # ── Pagination ────────────────────────────────────────────────────────────
     DEFAULT_PAGE_SIZE: int = 50
@@ -88,6 +108,16 @@ class Settings(BaseSettings):
             if o not in origins:
                 origins.append(o)
         return origins
+
+    @cached_property
+    def redis_url(self) -> str:
+        """REDIS_URL avec REDIS_PASSWORD encodé (remplace un éventuel userinfo)."""
+        if not self.REDIS_PASSWORD:
+            return self.REDIS_URL
+        parts = urlsplit(self.REDIS_URL)
+        host = parts.netloc.rsplit("@", 1)[-1]
+        netloc = f":{quote(self.REDIS_PASSWORD, safe='')}@{host}"
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
     @property
     def is_production(self) -> bool:

@@ -1,26 +1,27 @@
 import logging
-import re
 
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Body
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials
 from jose import JWTError
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 
 from app.core.deps import CurrentUserPendingOk, bearer_scheme
-from app.core.security import create_token_pair, decode_token, is_token_revoked, revoke_token, verify_password
-
-# Instance locale — le wiring global est dans main.py.
-# Compteurs dans Redis : avec N workers gunicorn, un stockage en mémoire
-# multiplierait la limite par N (chaque worker compte de son côté).
-limiter = Limiter(key_func=get_remote_address, storage_uri=settings.REDIS_URL)
+from app.core.rate_limit import limiter
+from app.core.security import (
+    RevocationUnavailable,
+    create_token_pair,
+    decode_token,
+    is_token_revoked,
+    mark_refresh_rotated,
+    revoke_token,
+    verify_password,
+)
 from app.models.user import User, UserStatus
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -98,8 +99,16 @@ async def login(request: Request, body: LoginRequest = Body(...), db: AsyncSessi
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(body: RefreshRequest = Body(...), db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    """Renouvellement de la paire de tokens via le refresh token."""
+@limiter.limit(settings.RATE_LIMIT_REFRESH)
+async def refresh(request: Request, body: RefreshRequest = Body(...), db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    """Renouvellement de la paire de tokens via le refresh token.
+
+    Rotation (APP-10) : chaque échange invalide l'ancien refresh token, après un
+    court délai de grâce (réponse perdue sur réseau faible). Si Redis est
+    indisponible, le renouvellement répond 503 (incident temporaire : les
+    clients conservent la session et réessaient) plutôt que d'accepter un
+    jeton dont on ne peut pas vérifier la révocation.
+    """
     invalid = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Refresh token invalide ou expiré.",
@@ -124,8 +133,17 @@ async def refresh(body: RefreshRequest = Body(...), db: AsyncSession = Depends(g
         if iat is None or datetime.fromtimestamp(iat, tz=timezone.utc) < user.tokens_valid_from:
             raise invalid
 
-    if await is_token_revoked(body.refresh_token):
-        raise invalid
+    try:
+        if await is_token_revoked(body.refresh_token, fail_closed=True):
+            raise invalid
+        if not await mark_refresh_rotated(body.refresh_token, settings.REFRESH_ROTATION_GRACE_SECONDS):
+            logger.warning("[Security] refresh token déjà échangé réutilisé (user %s)", user.id)
+            raise invalid
+    except RevocationUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service momentanément indisponible. Réessayez dans quelques instants.",
+        )
 
     tokens = create_token_pair(str(user.id), user.role.value)
     return TokenResponse(**tokens, must_change_password=user.must_change_password)

@@ -5,7 +5,7 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +15,15 @@ from app.models.base import TimestampMixin, UUIDMixin
 
 class RapportJournalier(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "rapports_journalier"
+    # Index présents en base (migrations) et déclarés ici pour que
+    # `alembic check` reste sans écart (APP-27).
+    __table_args__ = (
+        Index("ix_rapports_journalier_created_at", "created_at"),
+        Index("ix_rapports_journalier_date_rapport", "date_rapport"),
+        Index("ix_rapports_journalier_ecole", "ecole"),
+        Index("ix_rapports_journalier_ief", "ief"),
+        Index("ix_rapports_journalier_nom_tuteur", "nom_tuteur"),
+    )
 
     teacher_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

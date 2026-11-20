@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from sqlalchemy import String, Integer, ForeignKey
+from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import mapped_column, Mapped
 
@@ -13,6 +13,11 @@ class Document(UUIDMixin, TimestampMixin, Base):
     """Ressource pédagogique uploadée par un administrateur."""
 
     __tablename__ = "documents"
+    # Index présents en base (migrations) et déclarés ici pour que
+    # `alembic check` reste sans écart (APP-27).
+    __table_args__ = (
+        Index("ix_documents_created_at", "created_at"),
+    )
 
     # Titre affiché dans l'interface (saisi par l'admin, ou déduit du nom de fichier)
     title: Mapped[str] = mapped_column(String(255), nullable=False)

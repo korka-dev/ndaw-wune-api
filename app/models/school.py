@@ -9,10 +9,11 @@ class School(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "schools"
     __table_args__ = (
         UniqueConstraint("director_phone", name="uq_schools_director_phone"),
+        UniqueConstraint("code_ecole", name="uq_schools_code_ecole"),
     )
 
     name:            Mapped[str]           = mapped_column(String(255), nullable=False)
-    code_ecole:      Mapped[Optional[int]] = mapped_column(nullable=True, unique=True, index=True)
+    code_ecole:      Mapped[Optional[int]] = mapped_column(nullable=True, index=True)  # unicité : uq_schools_code_ecole
     region:          Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     city:            Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     director:        Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

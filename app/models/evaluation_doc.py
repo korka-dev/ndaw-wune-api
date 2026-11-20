@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import Boolean, Integer, String, Text
+from sqlalchemy import Boolean, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,12 @@ class EvaluationDoc(Base, UUIDMixin, TimestampMixin):
     """
 
     __tablename__ = "evaluation_docs"
+    # Index présents en base (migrations) et déclarés ici pour que
+    # `alembic check` reste sans écart (APP-27).
+    __table_args__ = (
+        Index("ix_evaluation_docs_is_active", "is_active"),
+        Index("ix_evaluation_docs_langue", "langue"),
+    )
 
     langue: Mapped[str] = mapped_column(String(100), nullable=False)
     titre:  Mapped[str] = mapped_column(String(255), nullable=False)

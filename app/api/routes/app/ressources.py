@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -105,6 +106,15 @@ async def _require_mobile_user_or_token(
         raise HTTPException(status_code=401, detail="Utilisateur introuvable.")
     if user.status == UserStatus.inactif:
         raise HTTPException(status_code=403, detail="Compte désactivé.")
+    # APP-10 : un jeton émis avant un changement/reset de mot de passe est
+    # refusé ici comme sur toutes les autres routes (médias compris).
+    if user.tokens_valid_from is not None:
+        iat = payload.get("iat")
+        if iat is None or datetime.fromtimestamp(iat, tz=timezone.utc) < user.tokens_valid_from:
+            raise HTTPException(status_code=401, detail="Token invalide ou expiré.")
+    # APP-08 : l'activation (mot de passe temporaire remplacé) est imposée aussi ici.
+    if user.must_change_password:
+        raise HTTPException(status_code=403, detail="PASSWORD_CHANGE_REQUIRED")
     if user.role not in (UserRole.enseignant, UserRole.superviseur):
         raise HTTPException(status_code=403, detail="Accès réservé aux utilisateurs mobiles.")
     return user

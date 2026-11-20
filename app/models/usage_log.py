@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import Integer, String
+from sqlalchemy import Index, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,11 @@ from app.models.base import TimestampMixin, UUIDMixin
 
 class UsageLog(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "usage_logs"
+    # Index présents en base (migrations) et déclarés ici pour que
+    # `alembic check` reste sans écart (APP-27).
+    __table_args__ = (
+        Index("ix_usage_logs_created_at", "created_at"),
+    )
 
     user_id:   Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     user_name: Mapped[str]                 = mapped_column(String(150), nullable=False)
