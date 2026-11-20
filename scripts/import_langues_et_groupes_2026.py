@@ -53,12 +53,13 @@ if not os.path.exists("/.dockerenv") and (
         os.environ["DATABASE_URL"] = _DEFAULT_DB
 
 from app.core.database import AsyncSessionLocal
+from app.core.config import settings
 from app.core.security import hash_password
 from app.models.school import School
 from app.models.school_classe import SchoolClasse
 from app.models.user import User, UserGroupe, UserRole, UserStatus
 
-DEFAULT_PASSWORD = "Passer123"
+DEFAULT_PASSWORD = settings.DEFAULT_USER_PASSWORD  # jamais codé en dur (APP-03/08)
 
 
 def _normalize_name(name: str) -> str:
@@ -238,7 +239,7 @@ async def run(langues_path: str, assignation_path: str) -> None:
             await session.commit()
             print(f"\n{'='*60}")
             print(f"  ✅  Import terminé avec succès !")
-            print(f"  Mot de passe par défaut des nouveaux enseignants : {DEFAULT_PASSWORD}")
+            print("  Mot de passe par défaut des nouveaux enseignants : DEFAULT_USER_PASSWORD (non affiché)")
             print(f"  (changement obligatoire à la première connexion — pensez à")
             print(f"   renseigner leur téléphone/email dans l'admin pour la connexion)")
             print(f"{'='*60}\n")

@@ -200,9 +200,6 @@ async def update_user(
     if email or phone:
         await _assert_unique_credentials(db, email, phone, exclude_id=user_id)
 
-    if "password" in data:
-        user.password_hash = hash_password(data.pop("password"))
-
     # Quand un enseignant change d'école, le retirer des listes de superviseurs de l'ancienne école
     if "school_id" in data and data["school_id"] != user.school_id and user.role == UserRole.enseignant:
         teacher_id_str = str(user_id)

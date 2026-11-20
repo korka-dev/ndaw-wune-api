@@ -25,3 +25,6 @@ uploads/
 *.xlsx
 *.xls
 *.csv
+
+# Sauvegardes (nominatives) — jamais versionnées (APP-48)
+backups/

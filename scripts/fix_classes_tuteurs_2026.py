@@ -53,11 +53,12 @@ from sqlalchemy import text
 
 from app.core.database import AsyncSessionLocal
 from app.core.redis import invalidate_sync_caches
+from app.core.config import settings
 from app.core.security import hash_password
 
 DRY_RUN = "--apply" not in sys.argv
 FILE_ARG = next((a for a in sys.argv[1:] if not a.startswith("--")), None)
-DEFAULT_PASSWORD = "Passer123"
+DEFAULT_PASSWORD = settings.DEFAULT_USER_PASSWORD  # jamais codé en dur (APP-03/08)
 
 
 def strip_accents(s: str) -> str:
@@ -210,7 +211,7 @@ async def run(xlsx_path: str):
             print(f"    … et {len(errors) - 30} autres")
         print(f"{'='*60}\n")
         if created and not DRY_RUN:
-            print(f"  Mot de passe temporaire des nouveaux tuteurs : {DEFAULT_PASSWORD}")
+            print("  Mot de passe temporaire des nouveaux tuteurs : DEFAULT_USER_PASSWORD (non affiché)")
             print("  (changement obligatoire à la première connexion — pensez à")
             print("   renseigner leur téléphone/email dans l'admin pour la connexion)\n")
         if DRY_RUN:

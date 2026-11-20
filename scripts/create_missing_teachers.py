@@ -41,10 +41,11 @@ if not os.path.exists("/.dockerenv") and (
 
 from sqlalchemy import text
 from app.core.database import AsyncSessionLocal
+from app.core.config import settings
 from app.core.security import hash_password
 
 DRY_RUN = "--apply" not in sys.argv
-DEFAULT_PASSWORD = "NdawWune2025!"
+DEFAULT_PASSWORD = settings.DEFAULT_USER_PASSWORD  # jamais codé en dur (APP-03/08)
 
 
 async def run():
@@ -151,7 +152,7 @@ async def run():
             print(f"  Superviseurs assignés : {total_assigned}")
             print(f"  Total enseignants : {total_teachers}")
             print(f"  Superviseurs avec enseignants : {sups_with}/{total_sups}")
-            print(f"  Mot de passe enseignants : {DEFAULT_PASSWORD}")
+            print("  Mot de passe enseignants : DEFAULT_USER_PASSWORD (non affiché)")
         else:
             print(f"  DRY-RUN — Actions prévues :")
             print(f"  Enseignants à créer : {total_created}")

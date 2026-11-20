@@ -34,6 +34,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Démarrage de %s [%s]", settings.APP_NAME, settings.APP_ENV)
+    if settings.secret_key_is_compromised and not settings.is_development:
+        # APP-04 : pas d'arrêt brutal (les agents terrain seraient tous déconnectés
+        # sans préparation) mais alerte explicite à chaque démarrage. La rotation
+        # se fait de façon coordonnée par l'exploitant (voir docs/SECURITE_EXPLOITATION.md).
+        logger.critical(
+            "SECRET_KEY compromise : cette clé a été publiée dans l'historique git. "
+            "Générez une nouvelle clé pour l'environnement %s et planifiez la rotation.",
+            settings.APP_ENV,
+        )
     await get_redis()
     yield
     logger.info("Arrêt de l'application.")

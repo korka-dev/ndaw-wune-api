@@ -21,7 +21,7 @@ from app.core.security import create_token_pair, decode_token, is_token_revoked,
 # Compteurs dans Redis : avec N workers gunicorn, un stockage en mémoire
 # multiplierait la limite par N (chaque worker compte de son côté).
 limiter = Limiter(key_func=get_remote_address, storage_uri=settings.REDIS_URL)
-from app.models.user import User, UserRole, UserStatus
+from app.models.user import User, UserStatus
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -174,53 +174,27 @@ async def logout(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/reset-password", status_code=status.HTTP_410_GONE)
 @limiter.limit("3/minute")
 async def reset_password(
     request: Request,
     body: ResetPasswordRequest = Body(...),
-    db: AsyncSession = Depends(get_db),
 ) -> Response:
     """
-    Réinitialisation de mot de passe sans authentification.
-    Utilisé depuis l'écran 'Mot de passe oublié' de l'app mobile.
+    Réinitialisation publique FERMÉE (rapport V2, APP-01).
 
-    ⚠️  Sans vérification OTP/email, cette route permet à quiconque connaissant
-    le numéro de téléphone de changer le mot de passe. À sécuriser avec un OTP
-    en production si le contexte le permet.
+    L'ancienne route changeait le mot de passe de n'importe quel compte à partir
+    du seul identifiant, sans preuve de possession. Elle est désactivée pour tous
+    les rôles. Un mot de passe oublié se réinitialise désormais par une personne
+    autorisée (admin → /admin/comptes-terrain/{id}/reset-password), ce qui
+    invalide aussi les anciennes sessions. Un parcours par jeton à usage unique
+    pourra être ajouté quand ARED aura choisi le canal de récupération.
     """
-    identifier = body.identifier
-
-    # Rechercher l'utilisateur par e-mail ou téléphone
-    phone_conditions = []
-    if "@" not in identifier:
-        from app.api.routes.auth import _phone_variants
-        for variant in _phone_variants(identifier):
-            phone_conditions.append(User.phone == variant)
-
-    result = await db.execute(
-        select(User).where(
-            or_(func.lower(User.email) == identifier, *phone_conditions)
-        )
+    logger.warning("[Security] reset-password public appelé — route fermée (APP-01)")
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "La réinitialisation en libre-service est désactivée. "
+            "Contactez votre superviseur ou l'administrateur pour obtenir un nouveau mot de passe."
+        ),
     )
-    user = result.scalar_one_or_none()
-
-    # Réponse identique si l'utilisateur n'existe pas (évite l'énumération)
-    if user is None:
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    if user.status == UserStatus.inactif:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte désactivé. Contactez l'administrateur.",
-        )
-
-    # Route publique, sans OTP : un compte d'administration ne doit JAMAIS pouvoir
-    # être pris par quiconque connaît son e-mail. Réponse identique (204) pour ne
-    # rien révéler ; le mot de passe d'un admin se change connecté, ou par un autre admin.
-    if user.role in (UserRole.admin, UserRole.coordonnateur):
-        logger.warning("[Security] reset-password public refusé pour un compte %s", user.role.value)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    await user_service.change_password(db, user, body.new_password)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)

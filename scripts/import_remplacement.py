@@ -46,13 +46,14 @@ if not os.path.exists("/.dockerenv") and (
         os.environ["DATABASE_URL"] = _DEFAULT_DB
 
 from app.core.database import AsyncSessionLocal
+from app.core.config import settings
 from app.core.security import hash_password
 from app.models.eleve import Eleve
 from app.models.school import School
 from app.models.school_classe import SchoolClasse
 from app.models.user import User, UserRole, UserStatus
 
-SUPERVISEUR_DEFAULT_PASSWORD = "NdawWune2025!"
+SUPERVISEUR_DEFAULT_PASSWORD = settings.DEFAULT_USER_PASSWORD  # jamais codé en dur (APP-03/08)
 
 HEADER = [
     "code_ief", "ief", "code_commune", "commune", "directeur",
@@ -376,7 +377,7 @@ async def run(xlsx_path: str) -> None:
             await session.commit()
             print(f"\n{'='*60}")
             print(f"  ✅  Import terminé avec succès !")
-            print(f"  Mot de passe superviseurs : {SUPERVISEUR_DEFAULT_PASSWORD}")
+            print("  Mot de passe superviseurs : DEFAULT_USER_PASSWORD (non affiché)")
             print(f"  (changement obligatoire à la première connexion)")
             print(f"{'='*60}\n")
 

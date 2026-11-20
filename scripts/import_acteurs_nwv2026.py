@@ -23,10 +23,11 @@ import pandas as pd
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from app.core.config import settings  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SESSION_ID  = "5b759235-a384-4e4a-9de1-e2c015e2ca85"
-DEFAULT_PWD = "Passer123"
+DEFAULT_PWD = settings.DEFAULT_USER_PASSWORD  # jamais codé en dur (APP-03/08)
 DB_USER     = "ared_user"
 DB_NAME     = "ared_ndawune"
 DOCKER_SVC  = "db"   # nom du service dans docker-compose
@@ -242,7 +243,7 @@ SELECT role, COUNT(*) FROM users WHERE role IN ('enseignant','superviseur') GROU
     print(f"   Superviseurs créés : {created_sup}")
     print(f"   Tuteurs créés      : {created_tut}")
     print(f"   Doublons ignorés   : {skipped}")
-    print(f"   Mot de passe       : {DEFAULT_PWD}")
+    print("   Mot de passe       : DEFAULT_USER_PASSWORD (non affiché)")
     print(f"   Connexion          : numéro WhatsApp (ex: 779687423)")
     if warnings:
         print(f"\n⚠  {len(warnings)} avertissement(s) :")

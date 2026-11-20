@@ -33,7 +33,7 @@ class UserCreate(BaseModel):
     email:     Optional[str]       = None
     phone:     Optional[str]       = None
     # Le mot de passe est optionnel à la création : si absent, le service
-    # applique le mot de passe par défaut (P@sser123) et force le changement.
+    # applique DEFAULT_USER_PASSWORD (configuration) et force le changement.
     password:  Optional[str]       = None
     role:      UserRole
     school_id: Optional[uuid.UUID] = None
@@ -56,6 +56,16 @@ class UserCreate(BaseModel):
     def normalize_phone(cls, v: Optional[str]) -> Optional[str]:
         return _normalize_sn_phone(v)
 
+    @field_validator("password")
+    @classmethod
+    def password_min_length(cls, v: Optional[str]) -> Optional[str]:
+        # APP-08 : même politique minimale que le changement et le reset.
+        if v is None or not v.strip():
+            return None
+        if len(v.strip()) < 8:
+            raise ValueError("Le mot de passe doit contenir au moins 8 caractères.")
+        return v.strip()
+
     @model_validator(mode="after")
     def email_or_phone_required(self) -> "UserCreate":
         if not self.email and not self.phone:
@@ -70,7 +80,9 @@ class UserUpdate(BaseModel):
     title:     Optional[str]        = None
     email:     Optional[str]        = None
     phone:     Optional[str]        = None
-    password:  Optional[str]        = None
+    # Pas de champ password (APP-02) : un mot de passe ne se change jamais par la
+    # modification générale d'un compte, mais par /reset-password (politique,
+    # invalidation des sessions) ou par /auth/change-password.
     status:    Optional[UserStatus] = None
     school_id: Optional[uuid.UUID]  = None
     niveau:    Optional[List[str]]  = None

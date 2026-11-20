@@ -56,13 +56,14 @@ if not os.path.exists("/.dockerenv"):
     os.environ["DATABASE_URL"] = raw
 
 from app.core.database import AsyncSessionLocal
+from app.core.config import settings
 from app.core.security import hash_password
 from app.models.eleve import Eleve
 from app.models.school import School
 from app.models.school_classe import SchoolClasse
 from app.models.user import User, UserRole, UserStatus
 
-SUPERVISOR_DEFAULT_PASSWORD = "NdawWune2025!"
+SUPERVISOR_DEFAULT_PASSWORD = settings.DEFAULT_USER_PASSWORD  # jamais codé en dur (APP-03/08)
 
 
 # ── Lecture Excel avec openpyxl ──────────────────────────────────────────────
@@ -493,7 +494,7 @@ async def run(xlsx_path: str, dry_run: bool = False) -> None:
 
             await session.commit()
             print("\n✅  Import terminé avec succès !")
-            print(f"   Mot de passe temporaire des superviseurs : {SUPERVISOR_DEFAULT_PASSWORD}")
+            print("   Mot de passe temporaire des superviseurs : DEFAULT_USER_PASSWORD (non affiché)")
             print("   (les superviseurs devront le changer à la première connexion)\n")
 
         except Exception as e:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from functools import cached_property
 from typing import List, Literal
 
@@ -93,6 +94,15 @@ class Settings(BaseSettings):
         return self.APP_ENV == "production"
 
     @property
+    def secret_key_is_compromised(self) -> bool:
+        """
+        Vrai si SECRET_KEY est une clé publiée dans l'historique git (APP-04).
+        On compare des empreintes SHA-256, jamais les valeurs. Une telle clé
+        permet de forger des jetons : elle ne doit servir qu'en développement.
+        """
+        return hashlib.sha256(self.SECRET_KEY.encode()).hexdigest() in _COMPROMISED_SECRET_KEY_SHA256
+
+    @property
     def is_development(self) -> bool:
         return self.APP_ENV == "development"
 
@@ -133,5 +143,11 @@ class Settings(BaseSettings):
             )
         return v
 
+
+# Empreintes SHA-256 de clés ayant été versionnées (ex. ancien .env.dev, dont le
+# commentaire indiquait « même clé que prod »). Ajouter ici toute clé exposée.
+_COMPROMISED_SECRET_KEY_SHA256 = frozenset({
+    "fad69ec5894922d44b9a3d7c75680773f9c964fcb65144ca0a74cd8dd084697f",
+})
 
 settings = Settings()

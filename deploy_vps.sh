@@ -18,6 +18,7 @@
 #  Options (variables d'environnement) :
 #    API_DOMAIN=api.exemple.com     domaine public de l'API (défaut : api.ndawwune.cloud)
 #    ADMIN_DOMAIN=admin.exemple.com domaine du dashboard, autorisé en CORS (défaut : admin.ndawwune.cloud)
+#    ADMIN_EMAIL=admin@exemple.com  e-mail du compte admin initial (créé une fois au 1er install)
 #    SKIP_CADDY=1                ne pas installer/configurer Caddy
 #    SKIP_FIREWALL=1             ne pas toucher au pare-feu UFW
 #
@@ -108,6 +109,7 @@ else
   set_env POSTGRES_PASSWORD        "$(openssl rand -hex 24)"
   set_env CORS_ORIGINS             "https://${ADMIN_DOMAIN}"
   set_env ADMIN_PASSWORD           "$ADMIN_PASSWORD_GENERATED"
+  [ -n "${ADMIN_EMAIL:-}" ] && set_env ADMIN_EMAIL "$ADMIN_EMAIL"
   set_env GUNICORN_WORKERS         "$WORKERS"
   set_env MAX_CONNECTIONS_POOL     "$POOL"
   set_env MAX_OVERFLOW             "$OVERFLOW"
@@ -157,6 +159,16 @@ if [ "$STATUS" != "healthy" ]; then
 fi
 success "API en ligne sur 127.0.0.1:8000."
 
+# Compte admin initial : commande ponctuelle, uniquement au premier install (APP-03).
+if [ -n "$ADMIN_PASSWORD_GENERATED" ]; then
+  if [ -z "$(grep '^ADMIN_EMAIL=' .env | cut -d= -f2-)" ]; then
+    warn "ADMIN_EMAIL vide dans .env — compte admin non créé. Renseignez-le puis : make create-admin"
+    ADMIN_PASSWORD_GENERATED=""
+  else
+    docker compose exec -T backend python scripts/create_admin.py
+  fi
+fi
+
 # ── 5. Caddy (HTTPS) ──────────────────────────────────────────────────────────
 header "Étape 5/5 — Reverse proxy HTTPS (Caddy)"
 if [ "${SKIP_CADDY:-0}" = "1" ]; then
@@ -203,7 +215,7 @@ if [ -n "$ADMIN_PASSWORD_GENERATED" ]; then
   echo -e "${BOLD}Compte administrateur créé :${NC}"
   echo -e "   E-mail       : $(grep '^ADMIN_EMAIL=' .env | cut -d= -f2-)"
   echo -e "   Mot de passe : ${BOLD}${ADMIN_PASSWORD_GENERATED}${NC}"
-  echo -e "   (aussi stocké dans .env → ADMIN_PASSWORD ; changez-le après la première connexion)"
+  echo -e "   (temporaire : changement imposé à la première connexion ; retirez ensuite ADMIN_PASSWORD du .env)"
 fi
 echo ""
 log "Mises à jour : ./redeploy_backend.sh   |   Logs : docker compose logs -f backend"

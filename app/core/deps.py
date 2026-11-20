@@ -93,13 +93,27 @@ async def get_current_user(
     return user
 
 
+def is_evaluateur(user: User) -> bool:
+    """Un évaluateur est aujourd'hui un coordonnateur portant le titre « evaluateur »."""
+    return user.role == UserRole.coordonnateur and (user.title or "").strip().lower() == "evaluateur"
+
+
 async def require_admin(
+    request: Request,
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     if current_user.role not in (UserRole.admin, UserRole.coordonnateur):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès réservé aux administrateurs.",
+        )
+    # APP-02 : l'évaluateur n'a plus les droits complets d'un coordonnateur.
+    # En attendant la matrice des rôles validée par ARED, il consulte (GET)
+    # mais ne modifie rien : ni comptes, ni référentiels, ni imports.
+    if is_evaluateur(current_user) and request.method not in ("GET", "HEAD", "OPTIONS"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Un compte évaluateur est en lecture seule.",
         )
     return current_user
 

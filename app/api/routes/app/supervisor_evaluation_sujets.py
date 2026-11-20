@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.core.deps import DB, SuperviseurUser
 from app.core.langue import langue_matches
 from app.core.upload_utils import ALLOWED_AUDIO_EXTENSIONS, check_extension_allowed, read_upload_capped
+from app.models.audit_log import AuditLog
 from app.models.eleve import Eleve
 from app.models.evaluation_resultat import EvaluationResultat
 from app.models.evaluation_sujet import EvaluationSujet
@@ -375,5 +376,18 @@ async def get_audio(filename: str, db: DB, current_user: SuperviseurUser):
     path = Path(settings.UPLOADS_DIR) / filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="Audio introuvable.")
+    # Journal d'accès minimal (APP-07) : qui, quel tirage, quand — sans nom d'enfant.
+    db.add(AuditLog(
+        user_id=current_user.id,
+        user_name=current_user.name,
+        user_role=current_user.role.value,
+        action="read",
+        entity="Audio d'évaluation",
+        method="GET",
+        path="/api/v1/app/supervisor/evaluation-audio",
+        description=f"Lecture audio — tirage {tirage_id}",
+    ))
+    await db.commit()
+
     media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     return FileResponse(str(path), media_type=media_type, filename=filename)
