@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from app.models.seance import SeanceStatus
 
 
@@ -24,6 +24,9 @@ class SeanceStart(BaseModel):
     date_seance:          datetime
     started_at:           datetime
     nb_eleves_total:      Optional[int]        = None
+    # Identifiant stable généré par le téléphone (APP-16/18). Facultatif pour
+    # les anciennes versions de l'app.
+    client_seance_id:     Optional[str]        = Field(default=None, max_length=64)
 
     @field_validator("classe")
     @classmethod
@@ -53,6 +56,26 @@ class SeanceFinish(BaseModel):
     total_paused_minutes: Optional[int]       = None
 
 
+class SeanceComplete(SeanceStart):
+    """Séance faite hors ligne, envoyée en une fois (démarrage + clôture).
+
+    Idempotente par `client_seance_id` (obligatoire) et indépendante de la
+    séance éventuellement active sur le serveur (APP-16/18).
+    """
+    client_seance_id:     str                  = Field(min_length=1, max_length=64)
+    finished_at:          datetime
+    duree_minutes:        int                  = Field(ge=0, le=24 * 60)
+    nb_eleves_presents:   Optional[int]        = None
+    pauses:               List[PauseEvent]     = []
+    total_paused_minutes: Optional[int]        = None
+
+
+class SeanceRecovery(BaseModel):
+    """Clôture d'une séance oubliée par le tuteur (APP-21). Aucune durée n'est
+    inférée : la séance reste sans durée mesurée."""
+    motif: Optional[str] = Field(default=None, max_length=500)
+
+
 class SeanceResponse(BaseModel):
     id:                   uuid.UUID
     session_id:           uuid.UUID
@@ -69,6 +92,9 @@ class SeanceResponse(BaseModel):
     status:               SeanceStatus
     pauses:               List[PauseEvent]    = []
     total_paused_minutes: Optional[int]       = None
+    client_seance_id:     Optional[str]       = None
+    cloture_mode:         Optional[str]       = None
+    auto_closed:          bool                = False
 
     model_config = {"from_attributes": True}
 

@@ -6,7 +6,10 @@ from fastapi import APIRouter, status
 
 from app.core.deps import DB, TeacherUser
 from app.core.pagination import Page, Pagination
-from app.schemas.seance import SeanceFinish, SeanceMissedReport, SeancePauseBody, SeanceResumeBody, SeanceResponse, SeanceStart
+from app.schemas.seance import (
+    SeanceComplete, SeanceFinish, SeanceMissedReport, SeancePauseBody, SeanceRecovery,
+    SeanceResponse, SeanceResumeBody, SeanceStart,
+)
 from app.services import seance_service
 
 router = APIRouter(prefix="/seances", tags=["App — Séances"])
@@ -35,6 +38,24 @@ async def active_seance(current_user: TeacherUser, db: DB) -> SeanceResponse | N
 async def start_seance(body: SeanceStart, current_user: TeacherUser, db: DB) -> SeanceResponse:
     """Démarre le timer. Lève 409 si une séance est déjà en cours."""
     return await seance_service.start_seance(db, current_user.id, body)
+
+
+@router.post("/complete", response_model=SeanceResponse, status_code=status.HTTP_201_CREATED)
+async def complete_seance(body: SeanceComplete, current_user: TeacherUser, db: DB) -> SeanceResponse:
+    """Séance faite hors ligne, envoyée en une fois. Idempotente par
+    client_seance_id ; ne réutilise jamais la séance active d'un autre créneau."""
+    return await seance_service.complete_seance(db, current_user.id, body)
+
+
+@router.post("/{seance_id}/cloturer-oubli", response_model=SeanceResponse)
+async def recover_forgotten_seance(
+    seance_id: uuid.UUID,
+    body: SeanceRecovery,
+    current_user: TeacherUser,
+    db: DB,
+) -> SeanceResponse:
+    """Clôture une séance oubliée (sans durée mesurée), tracée dans l'historique."""
+    return await seance_service.recover_forgotten_seance(db, seance_id, current_user, body)
 
 
 @router.post("/{seance_id}/pause", response_model=SeanceResponse)

@@ -9,12 +9,7 @@ en cache par le navigateur.
 """
 from __future__ import annotations
 
-import base64
-import binascii
-import csv
-import io
 import json
-import re
 import uuid
 from collections import Counter
 from datetime import date
@@ -31,10 +26,8 @@ from app.core.export_utils import build_csv_response
 from app.core.pagination import Page, Pagination
 from app.models.rapport_journalier import RapportJournalier
 from app.models.user import User, UserRole
-from app.schemas.rapport_journalier import (
-    RapportJournalierAdminListItem,
-    RapportJournalierResponse,
-)
+from app.services.rapport_photos import LIST_COLUMNS, NB_PHOTOS, photo_response
+from app.schemas.rapport_journalier import RapportJournalierAdminListItem
 
 router = APIRouter(prefix="/rapports/journalier", tags=["Admin — Rapports Journaliers"])
 
@@ -76,39 +69,6 @@ def _apply_filters(
     return q
 
 
-# Nombre de photos calculé DANS Postgres, sans rapatrier le base64 : on compte
-# les occurrences du préfixe « data: » dans le texte. Volontairement tolérant —
-# un JSON malformé donnerait 0 plutôt que de faire échouer toute la requête,
-# ce que ferait un json_array_length().
-def _compte_data_uri(col):
-    return func.coalesce(
-        (func.length(col) - func.length(func.replace(col, "data:", ""))) / 5, 0
-    )
-
-
-# GREATEST des deux colonnes plutôt qu'un repli : un `photos_classe_url` valant
-# « [] » compterait 0 et masquerait la photo de l'ancienne colonne.
-_NB_PHOTOS = func.greatest(
-    _compte_data_uri(RapportJournalier.photos_classe_url),
-    _compte_data_uri(RapportJournalier.photo_classe_url),
-)
-
-_LIST_COLUMNS = [
-    RapportJournalier.id, RapportJournalier.teacher_id, RapportJournalier.date_rapport,
-    RapportJournalier.ief, RapportJournalier.commune, RapportJournalier.ecole,
-    RapportJournalier.superviseur, RapportJournalier.nom_tuteur,
-    RapportJournalier.nb_absences, RapportJournalier.absents,
-    RapportJournalier.semaine, RapportJournalier.jour_cours,
-    RapportJournalier.difficultes, RapportJournalier.autres_difficultes,
-    RapportJournalier.description_difficultes, RapportJournalier.directeur_venu,
-    RapportJournalier.besoin_appui, RapportJournalier.domaines_appui,
-    RapportJournalier.has_observations, RapportJournalier.commentaires,
-    RapportJournalier.soumis_en_offline, RapportJournalier.reponses_questions,
-    RapportJournalier.created_at,
-    _NB_PHOTOS.label("nb_photos"),
-]
-
-
 @router.get("", response_model=Page[RapportJournalierAdminListItem])
 async def list_rapports_journalier(
     db: DB,
@@ -122,7 +82,7 @@ async def list_rapports_journalier(
     ief:         Optional[str]       = None,
 ) -> Page[RapportJournalierAdminListItem]:
     base = _apply_filters(
-        select(*_LIST_COLUMNS), teacher_id=teacher_id, role=role, search=search,
+        select(*LIST_COLUMNS), teacher_id=teacher_id, role=role, search=search,
         date_from=date_from, date_to=date_to, ief=ief,
     ).order_by(RapportJournalier.date_rapport.desc(), RapportJournalier.created_at.desc())
 
@@ -186,8 +146,8 @@ async def stats_rapports_journalier(
         func.count().filter(RapportJournalier.besoin_appui.is_(True)).label("appui"),
         func.count().filter(RapportJournalier.has_observations.is_(True)).label("obs"),
         func.count().filter(RapportJournalier.soumis_en_offline.is_(True)).label("offline"),
-        func.count().filter(_NB_PHOTOS > 0).label("avec_photos"),
-        func.coalesce(func.sum(_NB_PHOTOS), 0).label("photos"),
+        func.count().filter(NB_PHOTOS > 0).label("avec_photos"),
+        func.coalesce(func.sum(NB_PHOTOS), 0).label("photos"),
     ), **f))).mappings().one()
 
     total = resume["total"] or 0
@@ -286,11 +246,11 @@ async def list_photos(
             RapportJournalier.id, RapportJournalier.date_rapport,
             RapportJournalier.nom_tuteur, RapportJournalier.ecole,
             RapportJournalier.ief, RapportJournalier.commune,
-            _NB_PHOTOS.label("nb_photos"),
+            NB_PHOTOS.label("nb_photos"),
         ),
         teacher_id=teacher_id, role=role, search=search,
         date_from=date_from, date_to=date_to, ief=ief,
-    ).where(_NB_PHOTOS > 0).order_by(RapportJournalier.date_rapport.desc())
+    ).where(NB_PHOTOS > 0).order_by(RapportJournalier.date_rapport.desc())
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     rows = (await db.execute(base.offset(page.skip).limit(page.limit))).mappings().all()
@@ -298,78 +258,16 @@ async def list_photos(
                 items=[PhotoItem(**r) for r in rows])
 
 
-def _photos_de(photos_json: Optional[str], photo_unique: Optional[str]) -> list[str]:
-    """Les deux colonnes coexistent : `photos_classe_url` (liste JSON, jusqu'à
-    3 photos) a remplacé `photo_classe_url` (une seule), gardée pour les
-    rapports anciens."""
-    if photos_json:
-        try:
-            parsed = json.loads(photos_json)
-            if isinstance(parsed, list):
-                urls = [u for u in parsed if isinstance(u, str) and u]
-                if urls:
-                    return urls
-        except (ValueError, TypeError):
-            pass
-    return [photo_unique] if photo_unique else []
-
-
-_DATA_URI = re.compile(r"^data:([\w.+-]+/[\w.+-]+)?;base64,(.+)$", re.DOTALL)
-
-
 @router.get("/{rapport_id}/photo/{index}")
 async def get_photo(db: DB, _: AdminUser, rapport_id: uuid.UUID, index: int) -> Response:
-    """Sert UNE photo, décodée en binaire.
-
-    Le stockage est un data URI base64 : le renvoyer tel quel coûterait 33 % de
-    plus et ne serait pas mis en cache. On décode, on annonce le vrai type MIME,
-    et on autorise le cache privé — l'image d'un rapport ne change jamais.
-    """
+    """Sert UNE photo, décodée en binaire (voir app/services/rapport_photos.py)."""
     row = (await db.execute(
         select(RapportJournalier.photos_classe_url, RapportJournalier.photo_classe_url)
         .where(RapportJournalier.id == rapport_id)
     )).mappings().first()
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rapport introuvable.")
-
-    urls = _photos_de(row["photos_classe_url"], row["photo_classe_url"])
-    if index < 0 or index >= len(urls):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Photo introuvable.")
-
-    m = _DATA_URI.match(urls[index].strip())
-    if not m:
-        # Ancien format : une vraie URL. On la renvoie au client, à lui d'aller
-        # la chercher — le serveur ne relaie pas de ressource externe.
-        return Response(content=urls[index], media_type="text/plain")
-    try:
-        binaire = base64.b64decode(m.group(2), validate=False)
-    except (binascii.Error, ValueError):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Photo illisible.")
-
-    return Response(
-        content=binaire,
-        media_type=_type_reel(binaire, m.group(1)),
-        headers={"Cache-Control": "private, max-age=86400"},
-    )
-
-
-def _type_reel(binaire: bytes, declare: Optional[str]) -> str:
-    """Type MIME déduit des octets, pas de l'étiquette du data URI.
-
-    L'app mobile annonce systématiquement `image/jpeg`, y compris pour des PNG
-    (constaté en base : un data URI « data:image/jpeg;base64,iVBORw0KGgo… », or
-    iVBORw est la signature PNG). Les navigateurs corrigent d'eux-mêmes, mais un
-    téléchargement ou un outil tiers se fierait à l'en-tête.
-    """
-    if binaire.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if binaire.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if binaire.startswith(b"GIF8"):
-        return "image/gif"
-    if binaire[:4] == b"RIFF" and binaire[8:12] == b"WEBP":
-        return "image/webp"
-    return declare or "image/jpeg"
+    return photo_response(row["photos_classe_url"], row["photo_classe_url"], index)
 
 
 @router.get("/export/csv")

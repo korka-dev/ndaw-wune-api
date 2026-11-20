@@ -113,6 +113,8 @@ class SeanceDetailItem(BaseModel):
     nb_eleves_total:      Optional[int]  = None
     planning_segment_id:  Optional[str]  = None
     soumis_offline:       Optional[bool] = None
+    # APP-21 : tuteur | tuteur_tardive | automatique | recuperation
+    cloture_mode:         Optional[str]  = None
     rapport_at:           Optional[str]  = None
     pauses:               Optional[list] = None
     total_paused_minutes: Optional[int]  = None
@@ -339,6 +341,7 @@ async def get_suivi_teacher(
             matiere=s.matiere,
             classe=s.classe,
             status=s.status.value,
+            cloture_mode=s.cloture_mode,
             has_rapport=s.id in rapports_map,
             nb_eleves_presents=s.nb_eleves_presents,
             nb_eleves_total=s.nb_eleves_total,

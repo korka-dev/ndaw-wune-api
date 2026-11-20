@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,12 @@ class SeanceStatus(str, enum.Enum):
 class Seance(Base, UUIDMixin, TimestampMixin):
     """Séance de cours enregistrée par un enseignant via le timer mobile."""
     __tablename__ = "seances"
+    __table_args__ = (
+        # Identifiant stable généré par le téléphone (APP-16/18) : une séance
+        # hors ligne n'est créée qu'une fois, et n'est jamais confondue avec
+        # une autre séance active.
+        UniqueConstraint("teacher_id", "client_seance_id", name="uq_seances_teacher_client_seance"),
+    )
 
     teacher_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -70,6 +76,18 @@ class Seance(Base, UUIDMixin, TimestampMixin):
     # de 4h sans timer_stop) plutôt que fermée par l'enseignant — permet à
     # l'admin de distinguer une séance normale d'une séance non clôturée.
     auto_closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+
+    # Identifiant client (ex. « offline-seance-… ») — APP-16/18.
+    client_seance_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Mode de clôture (APP-21) :
+    #   tuteur          — arrêt du minuteur par le tuteur (durée mesurée)
+    #   tuteur_tardive  — arrêt reçu après une clôture automatique (durée mesurée)
+    #   automatique     — séance oubliée, clôturée par le serveur (durée inconnue)
+    #   recuperation    — séance oubliée, clôturée par le tuteur depuis l'app (durée inconnue)
+    # Une clôture automatique ou une récupération ne porte JAMAIS de durée
+    # inférée : duree_minutes reste NULL.
+    cloture_mode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     # Effectif
     nb_eleves_presents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

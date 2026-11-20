@@ -54,6 +54,9 @@ class Settings(BaseSettings):
 
     # ── Compatibilité mobile (APP-46) ─────────────────────────────────────────
     # Version minimale de l'app acceptée sur /api/v1/app/* (vide = aucune).
+    # Intervalle de la clôture automatique des séances oubliées (APP-21).
+    # 0 = désactivée (tests).
+    SEANCE_CLEANUP_INTERVAL_SECONDS: int = 900
     MIN_APP_VERSION: str = ""
     # Dernière version publiée (information affichée par l'app).
     LATEST_APP_VERSION: str = ""

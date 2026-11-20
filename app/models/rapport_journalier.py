@@ -5,7 +5,7 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,8 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
         Index("ix_rapports_journalier_ecole", "ecole"),
         Index("ix_rapports_journalier_ief", "ief"),
         Index("ix_rapports_journalier_nom_tuteur", "nom_tuteur"),
+        # Idempotence (APP-16) : une clé d'opération client par auteur.
+        UniqueConstraint("teacher_id", "client_op_id", name="uq_rapports_journalier_teacher_client_op"),
     )
 
     teacher_id: Mapped[uuid.UUID] = mapped_column(
@@ -63,6 +65,13 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
     photo_classe_url:  Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # ancien champ — 1 seule photo
     photos_classe_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # liste JSON — jusqu'à 3 photos
     reponses_questions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON {question_id: réponse} — questions dynamiques configurées par l'admin
+
+    # ── Idempotence (APP-16) ─────────────────────────────────────────────────
+    # Clé générée par le téléphone à la saisie ; un rejeu renvoie le rapport
+    # déjà créé. L'empreinte du contenu détecte une même clé réutilisée pour
+    # un contenu différent (rejetée explicitement).
+    client_op_id:   Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    client_op_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # ── Relations ─────────────────────────────────────────────────────────────
     teacher: Mapped["User"] = relationship("User")

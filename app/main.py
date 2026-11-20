@@ -45,7 +45,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             settings.APP_ENV,
         )
     await get_redis()
+    # APP-21 : clôture périodique des séances oubliées, indépendante des pages.
+    maintenance_task = None
+    if settings.SEANCE_CLEANUP_INTERVAL_SECONDS > 0:
+        import asyncio
+        from app.services.maintenance import periodic_maintenance
+        maintenance_task = asyncio.create_task(periodic_maintenance())
     yield
+    if maintenance_task is not None:
+        maintenance_task.cancel()
     logger.info("Arrêt de l'application.")
     await close_redis()
     await engine.dispose()

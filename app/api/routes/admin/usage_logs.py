@@ -21,7 +21,6 @@ from app.core.export_utils import sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.seance import Seance
 from app.models.usage_log import UsageLog
-from app.services.seance_service import close_stale_seances
 
 FEATURE_LABELS: dict[str, str] = {
     "accueil": "Accueil", "planning": "Planning", "timer": "Timer",
@@ -96,7 +95,6 @@ async def list_usage_logs(
 ) -> Page[UsageLogOut]:
     # Cron paresseux : clôture les séances "en_cours" oubliées depuis 4h+
     # avant d'afficher la liste, pour que les logs timer reflètent l'état réel.
-    await close_stale_seances(db)
 
     d_from = _parse_date(date_from, "date_from")
     d_to   = _parse_date(date_to,   "date_to")
@@ -151,7 +149,6 @@ async def export_usage_logs_csv(
     date_to: Optional[str] = None,
 ) -> StreamingResponse:
     """Export CSV des événements d'usage (mêmes filtres que la liste)."""
-    await close_stale_seances(db)
 
     d_from = _parse_date(date_from, "date_from")
     d_to   = _parse_date(date_to,   "date_to")

@@ -13,8 +13,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditLog
 from app.models.seance import RapportProf, Seance, SeanceStatus
-from app.schemas.seance import SeanceFinish, SeancePauseBody, SeanceResumeBody, SeanceStart, SeanceMissedReport, RapportCreate
+from app.schemas.seance import (
+    RapportCreate, SeanceComplete, SeanceFinish, SeanceMissedReport, SeancePauseBody,
+    SeanceRecovery, SeanceResumeBody, SeanceStart,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +29,15 @@ AUTO_CLOSE_AFTER = timedelta(hours=4)
 
 
 async def close_stale_seances(db: AsyncSession, teacher_id: uuid.UUID | None = None) -> int:
-    """Clôture automatiquement les séances "en_cours" depuis plus de 4h.
+    """Clôture automatiquement les séances "en_cours" depuis plus de 4 h.
 
-    Appelée en tête des endpoints admin qui affichent les séances/logs
-    (pattern "cron paresseux" — pas d'infra de tâches planifiées dans ce
-    projet) : marque la séance terminee + auto_closed=True, avec une durée
-    plafonnée à AUTO_CLOSE_AFTER puisque l'heure réelle de fin est inconnue.
+    Appelée par la tâche de fond périodique (app/main.py) et au démarrage d'une
+    séance par le tuteur — jamais par la consultation d'une page (APP-21).
+
+    AUCUNE durée n'est inférée : l'heure réelle de fin est inconnue, donc
+    finished_at et duree_minutes restent NULL et cloture_mode = automatique.
+    Si l'arrêt réel du minuteur arrive plus tard depuis le téléphone, il est
+    accepté et remplace cet état (cloture_mode = tuteur_tardive).
     """
     seuil = datetime.now(timezone.utc) - AUTO_CLOSE_AFTER
     q = select(Seance).where(
@@ -40,18 +47,36 @@ async def close_stale_seances(db: AsyncSession, teacher_id: uuid.UUID | None = N
     )
     if teacher_id is not None:
         q = q.where(Seance.teacher_id == teacher_id)
-    rows = (await db.execute(q)).scalars().all()
+    rows = (await db.execute(q.with_for_update(skip_locked=True))).scalars().all()
 
     for seance in rows:
-        seance.status       = SeanceStatus.terminee
+        seance.status        = SeanceStatus.terminee
         seance.auto_closed   = True
-        seance.finished_at   = seance.started_at + AUTO_CLOSE_AFTER
-        seance.duree_minutes = int(AUTO_CLOSE_AFTER.total_seconds() // 60) - (seance.total_paused_minutes or 0)
+        seance.cloture_mode  = "automatique"
+        seance.finished_at   = None
+        seance.duree_minutes = None
 
     if rows:
         await db.flush()
         logger.info("close_stale_seances: %d séance(s) clôturée(s) automatiquement.", len(rows))
     return len(rows)
+
+
+def _seance_summary(seance: Seance) -> dict:
+    return {
+        "id":               str(seance.id),
+        "classe":           seance.classe,
+        "matiere":          seance.matiere,
+        "date_seance":      seance.date_seance.isoformat() if seance.date_seance else None,
+        "started_at":       seance.started_at.isoformat() if seance.started_at else None,
+        "client_seance_id": seance.client_seance_id,
+    }
+
+
+async def _get_by_client_id(db: AsyncSession, teacher_id: uuid.UUID, client_id: str) -> Seance | None:
+    return (await db.execute(
+        select(Seance).where(Seance.teacher_id == teacher_id, Seance.client_seance_id == client_id)
+    )).scalar_one_or_none()
 
 
 # ── Séances ────────────────────────────────────────────────────────────────────
@@ -121,18 +146,40 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
         # Récupération d'une séance oubliée : la clôture ne dépend plus de
         # l'ouverture d'une page admin — elle est faite ici, au moment où le
         # tuteur en aurait besoin (la séance est marquée auto_closed).
+        # Rejeu (APP-16) : la même séance client renvoie la séance déjà créée.
+        if body.client_seance_id:
+            deja = await _get_by_client_id(db, teacher_id, body.client_seance_id)
+            if deja is not None:
+                return deja
+
         await close_stale_seances(db, teacher_id)
         existing = await get_active_seance(db, teacher_id)
         if existing:
+            # Conflit explicite (APP-18/21) : le téléphone compare l'identité
+            # de la séance active avant toute réutilisation, et peut proposer
+            # au tuteur de la reprendre ou de la clôturer comme oubliée.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Une séance est déjà en cours. Terminez-la avant d'en démarrer une nouvelle.",
+                detail={
+                    "code":    "SEANCE_ACTIVE",
+                    "message": "Une séance est déjà en cours. Terminez-la ou clôturez-la avant d'en démarrer une nouvelle.",
+                    "active":  _seance_summary(existing),
+                },
             )
 
         seance = Seance(teacher_id=teacher_id, **body.model_dump())
         db.add(seance)
         try:
-            await db.flush()
+            async with db.begin_nested():
+                await db.flush()
+        except IntegrityError:
+            deja = await _get_by_client_id(db, teacher_id, body.client_seance_id) if body.client_seance_id else None
+            if deja is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Impossible de créer la séance. Réessayez ou contactez le support.",
+                )
+            return deja
         except SQLAlchemyError as exc:
             await db.rollback()
             orig = getattr(exc, "orig", exc)
@@ -247,16 +294,32 @@ async def finish_seance(
     )
     try:
         seance = await _get_seance_owned(db, seance_id, teacher_id)
-        if seance.status != SeanceStatus.en_cours:
+        if seance.status == SeanceStatus.terminee and not seance.auto_closed and seance.cloture_mode != "recuperation":
+            # Rejeu après perte de la réponse (APP-16) : même arrêt → succès.
+            if _same_instant(seance.finished_at, body.finished_at) and seance.duree_minutes == body.duree_minutes:
+                return seance
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code":    "SEANCE_DEJA_CLOTUREE",
+                    "message": "Cette séance a déjà été clôturée avec d'autres valeurs.",
+                },
+            )
+        if seance.status not in (SeanceStatus.en_cours, SeanceStatus.terminee):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cette séance n'est plus en cours.",
             )
 
+        # En cours, ou clôturée sans durée (automatique / récupération) : l'arrêt
+        # réel du minuteur, même tardif, est la seule durée mesurée (APP-21).
+        tardive = seance.status == SeanceStatus.terminee
         seance.finished_at        = body.finished_at
         seance.duree_minutes      = body.duree_minutes
         seance.nb_eleves_presents = body.nb_eleves_presents
         seance.status             = SeanceStatus.terminee
+        seance.auto_closed        = False
+        seance.cloture_mode       = "tuteur_tardive" if tardive else "tuteur"
 
         # Fusionner les pauses offline si le serveur n'en a pas encore
         if body.pauses and not seance.pauses:
@@ -290,6 +353,102 @@ async def finish_seance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Erreur inattendue lors de la clôture. Réessayez ou contactez le support.",
         )
+
+
+def _same_instant(a: datetime | None, b: datetime | None) -> bool:
+    if a is None or b is None:
+        return a is b
+    if a.tzinfo is None:
+        a = a.replace(tzinfo=timezone.utc)
+    if b.tzinfo is None:
+        b = b.replace(tzinfo=timezone.utc)
+    return abs((a - b).total_seconds()) < 1
+
+
+async def complete_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceComplete) -> Seance:
+    """Enregistre en une fois une séance faite hors ligne (APP-16/18).
+
+    - Idempotent par client_seance_id : un rejeu renvoie la séance existante.
+    - Indépendant de la séance active sur le serveur : on ne réutilise JAMAIS
+      une autre séance (ancien comportement sur 409).
+    - Si la séance existe déjà (démarrée en ligne puis oubliée / clôturée
+      automatiquement), l'arrêt mesuré la complète.
+    """
+    seance = await _get_by_client_id(db, teacher_id, body.client_seance_id)
+    if seance is not None:
+        if seance.status == SeanceStatus.en_cours or (
+            seance.status == SeanceStatus.terminee and seance.duree_minutes is None
+        ):
+            return await finish_seance(db, seance.id, teacher_id, SeanceFinish(
+                finished_at=body.finished_at, duree_minutes=body.duree_minutes,
+                nb_eleves_presents=body.nb_eleves_presents, pauses=body.pauses,
+                total_paused_minutes=body.total_paused_minutes,
+            ))
+        return seance
+
+    start = body.model_dump(include=set(SeanceStart.model_fields))
+    seance = Seance(
+        teacher_id=teacher_id,
+        **start,
+        status=SeanceStatus.terminee,
+        cloture_mode="tuteur",
+        finished_at=body.finished_at,
+        duree_minutes=body.duree_minutes,
+        nb_eleves_presents=body.nb_eleves_presents,
+        pauses=[p.model_dump() for p in body.pauses],
+        total_paused_minutes=body.total_paused_minutes,
+    )
+    try:
+        async with db.begin_nested():
+            db.add(seance)
+            await db.flush()
+    except IntegrityError:
+        deja = await _get_by_client_id(db, teacher_id, body.client_seance_id)
+        if deja is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Impossible d'enregistrer la séance. Vérifiez la session et le créneau.",
+            )
+        return deja
+    await db.refresh(seance)
+    return seance
+
+
+async def recover_forgotten_seance(
+    db: AsyncSession,
+    seance_id: uuid.UUID,
+    user,
+    body: SeanceRecovery,
+) -> Seance:
+    """Clôture par le tuteur d'une séance restée ouverte (APP-21).
+
+    Arbitrage tracé dans l'historique ; aucune durée inférée. Si l'arrêt réel
+    du minuteur arrive ensuite depuis un téléphone, il reste accepté.
+    """
+    seance = await _get_seance_owned(db, seance_id, user.id)
+    if seance.status != SeanceStatus.en_cours:
+        return seance  # déjà clôturée : rejouable sans effet
+    seance.status        = SeanceStatus.terminee
+    seance.cloture_mode  = "recuperation"
+    seance.finished_at   = None
+    seance.duree_minutes = None
+    db.add(AuditLog(
+        user_id=user.id,
+        user_name=user.name,
+        user_role=user.role.value,
+        action="update",
+        entity="Séance",
+        method="POST",
+        path=f"/api/v1/app/seances/{seance.id}/cloturer-oubli",
+        description=(
+            f"Séance oubliée clôturée par le tuteur (classe {seance.classe}, "
+            f"démarrée {seance.started_at:%d/%m/%Y %H:%M}) — sans durée mesurée"
+            + (f". Motif : {body.motif.strip()}" if body.motif and body.motif.strip() else "")
+        ) if seance.started_at else "Séance oubliée clôturée par le tuteur — sans durée mesurée",
+    ))
+    await db.flush()
+    await db.refresh(seance)
+    return seance
 
 
 async def list_teacher_seances(
@@ -330,6 +489,13 @@ async def submit_rapport(
             await db.execute(select(RapportProf).where(RapportProf.seance_id == body.seance_id))
         ).scalar_one_or_none()
         if existing:
+            # Rejeu après perte de la réponse (APP-16) : même contenu → succès.
+            if (
+                existing.contenu == body.contenu
+                and (existing.difficultes or None) == (body.difficultes or None)
+                and (existing.points_positifs or None) == (body.points_positifs or None)
+            ):
+                return existing
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Un rapport existe déjà pour cette séance.")
 
         rapport = RapportProf(teacher_id=teacher_id, **body.model_dump())

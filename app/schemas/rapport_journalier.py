@@ -28,6 +28,8 @@ class RapportJournalierCreate(BaseModel):
     photo_classe_url:         Optional[str]    = None
     photos_classe_url:        Optional[str]    = None   # JSON sérialisé (liste de data URIs, max 3)
     reponses_questions:       Optional[str]    = None   # JSON sérialisé {question_id: réponse}
+    # Clé d'opération générée par le téléphone à la saisie (APP-16).
+    client_op_id:             Optional[str]    = Field(default=None, min_length=1, max_length=64)
 
 
 class RapportJournalierAdminListItem(BaseModel):
@@ -65,6 +67,11 @@ class RapportJournalierAdminListItem(BaseModel):
     created_at:               datetime
 
     model_config = {"from_attributes": True}
+
+
+# Même forme pour l'app mobile : listes et accusés de réception sans photos
+# (APP-37). Les images se chargent via GET /app/rapports/journalier/{id}/photo/{i}.
+RapportJournalierListItem = RapportJournalierAdminListItem
 
 
 class RapportJournalierResponse(BaseModel):
