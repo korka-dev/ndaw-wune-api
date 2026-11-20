@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.deps import DB, SuperviseurUser
-from app.models.rapport_journalier import RapportJournalier
+from app.models.rapport_journalier import RAPPORT_COMPTE, RapportJournalier
 from app.models.user import User
 from app.schemas.rapport_difficulte_resolution import (
     DifficulteResolutionUpdate,
@@ -69,7 +69,7 @@ async def supervisor_difficultes(current_user: SuperviseurUser, db: DB) -> Diffi
     rapports = (
         await db.execute(
             select(RapportJournalier)
-            .where(RapportJournalier.teacher_id.in_(teacher_ids))
+            .where(RapportJournalier.teacher_id.in_(teacher_ids), RAPPORT_COMPTE)
             .order_by(RapportJournalier.date_rapport.desc(), RapportJournalier.created_at.desc())
         )
     ).scalars().all()

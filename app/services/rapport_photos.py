@@ -48,6 +48,8 @@ LIST_COLUMNS = [
     RapportJournalier.has_observations, RapportJournalier.commentaires,
     RapportJournalier.soumis_en_offline, RapportJournalier.reponses_questions,
     RapportJournalier.created_at,
+    RapportJournalier.statut, RapportJournalier.version, RapportJournalier.statut_motif,
+    RapportJournalier.statut_at, RapportJournalier.session_id,
     NB_PHOTOS.label("nb_photos"),
 ]
 

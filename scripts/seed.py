@@ -26,17 +26,18 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal as async_session_factory
+from app.core.identifiers import normalize_email
 from app.core.security import hash_password
 from app.models.user import User, UserRole, UserStatus
 
 
 # ── Paramètres du compte admin ────────────────────────────────────────────────
-ADMIN_EMAIL           = os.getenv("SEED_ADMIN_EMAIL",    "admin@ared.sn")
+ADMIN_EMAIL           = normalize_email(os.getenv("SEED_ADMIN_EMAIL",    "admin@ared.sn"))
 ADMIN_NAME            = os.getenv("SEED_ADMIN_NAME",     "Administrateur ARED")
 ADMIN_PASSWORD        = os.getenv("SEED_ADMIN_PASSWORD", settings.DEFAULT_USER_PASSWORD)
 ADMIN_MUST_CHANGE_PWD = os.getenv("SEED_MUST_CHANGE_PASSWORD", "false").lower() == "true"
@@ -45,7 +46,7 @@ ADMIN_MUST_CHANGE_PWD = os.getenv("SEED_MUST_CHANGE_PASSWORD", "false").lower() 
 async def seed(session: AsyncSession) -> None:
     # Vérifie si le compte existe déjà
     existing = await session.scalar(
-        select(User).where(User.email == ADMIN_EMAIL)
+        select(User).where(func.lower(User.email) == ADMIN_EMAIL)
     )
     if existing:
         print(f"[seed] Compte admin '{ADMIN_EMAIL}' déjà présent — ignoré.")

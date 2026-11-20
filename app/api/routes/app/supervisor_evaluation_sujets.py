@@ -24,11 +24,11 @@ from app.core.langue import langue_matches
 from app.core.upload_utils import ALLOWED_AUDIO_EXTENSIONS, check_extension_allowed, read_upload_capped
 from app.models.audit_log import AuditLog
 from app.models.eleve import Eleve
-from app.models.evaluation_resultat import EvaluationResultat
+from app.models.evaluation_resultat import EvaluationResultat, EvaluationResultatHistorique
 from app.models.evaluation_sujet import EvaluationSujet
 from app.models.evaluation_tirage import EvaluationTirage
 from app.models.user import User
-from app.services.supervisor_service import get_supervised_teacher_ids, resolve_supervisor_langue
+from app.services.supervisor_service import filter_supervised_eleve_ids, get_supervised_teacher_ids, resolve_supervisor_langue
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +115,9 @@ async def _get_owned_tirage(db, tirage_id: uuid.UUID, current_user: User) -> Eva
     if tirage is None or tirage.eleve is None:
         raise HTTPException(status_code=404, detail="Tirage introuvable.")
 
-    allowed_pairs = await _get_supervisor_school_classe_pairs(db, current_user)
-    e = tirage.eleve
-    if not any(e.school_id == sid and e.classe == cls for sid, cls in allowed_pairs):
+    # Même règle de périmètre que les évaluations (APP-06) : école de
+    # l'enseignant supervisé et classe normalisée.
+    if tirage.eleve_id not in await filter_supervised_eleve_ids(db, current_user, [tirage.eleve_id]):
         raise HTTPException(status_code=404, detail="Tirage introuvable.")
     return tirage
 
@@ -319,6 +319,24 @@ async def submit_tirage(
     ).scalar_one_or_none()
 
     if existante is not None:
+        # APP-30 : l'état du jour est figé avant correction ; l'audio
+        # antérieur (fichier immuable) reste référencé et consultable.
+        changement = (
+            existante.resultat != resultat
+            or (existante.commentaire or None) != commentaire_net
+            or (nouvel_audio is not None and nouvel_audio != existante.audio_filename)
+        )
+        if changement:
+            db.add(EvaluationResultatHistorique(
+                resultat_id=existante.id,
+                tirage_id=tirage.id,
+                superviseur_id=existante.superviseur_id,
+                resultat=existante.resultat,
+                commentaire=existante.commentaire,
+                audio_filename=existante.audio_filename,
+                observe_at=existante.updated_at or existante.created_at,
+                remplace_par_id=current_user.id,
+            ))
         existante.resultat       = resultat
         existante.commentaire    = commentaire_net
         existante.superviseur_id = current_user.id
@@ -350,6 +368,34 @@ async def submit_tirage(
     return {"status": "ok", "tirage_id": str(tirage_id), "resultat": resultat, "date_eval": aujourdhui.isoformat()}
 
 
+@router.get("/evaluation-tirages/{tirage_id}/historique")
+async def historique_tirage(tirage_id: uuid.UUID, current_user: SuperviseurUser, db: DB) -> dict:
+    """Toutes les observations datées d'un tirage et leurs corrections (APP-30),
+    chacune avec son propre fichier audio."""
+    await _get_owned_tirage(db, tirage_id, current_user)
+    resultats = (await db.execute(
+        select(EvaluationResultat).where(EvaluationResultat.tirage_id == tirage_id)
+        .order_by(EvaluationResultat.date_eval)
+    )).scalars().all()
+    corrections = (await db.execute(
+        select(EvaluationResultatHistorique).where(EvaluationResultatHistorique.tirage_id == tirage_id)
+        .order_by(EvaluationResultatHistorique.remplace_at)
+    )).scalars().all()
+    return {
+        "tirage_id": str(tirage_id),
+        "observations": [
+            {"id": str(r.id), "date_eval": r.date_eval.isoformat(), "resultat": r.resultat,
+             "commentaire": r.commentaire, "audio_filename": r.audio_filename,
+             "corrections": [
+                 {"resultat": c.resultat, "commentaire": c.commentaire, "audio_filename": c.audio_filename,
+                  "observe_at": c.observe_at.isoformat(), "remplace_at": c.remplace_at.isoformat()}
+                 for c in corrections if c.resultat_id == r.id
+             ]}
+            for r in resultats
+        ],
+    }
+
+
 @router.get("/evaluation-audio/{filename}")
 async def get_audio(filename: str, db: DB, current_user: SuperviseurUser):
     """Sert un fichier audio d'évaluation, uniquement au superviseur dont le
@@ -364,6 +410,12 @@ async def get_audio(filename: str, db: DB, current_user: SuperviseurUser):
     tirage_id = (await db.execute(
         select(EvaluationResultat.tirage_id).where(EvaluationResultat.audio_filename == filename).limit(1)
     )).scalar_one_or_none()
+    if tirage_id is None:
+        # Audio d'une version corrigée (APP-30) : toujours rattaché à son tirage.
+        tirage_id = (await db.execute(
+            select(EvaluationResultatHistorique.tirage_id)
+            .where(EvaluationResultatHistorique.audio_filename == filename).limit(1)
+        )).scalar_one_or_none()
     if tirage_id is None:
         tirage_id = (await db.execute(
             select(EvaluationTirage.id).where(EvaluationTirage.audio_filename == filename).limit(1)

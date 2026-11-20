@@ -29,3 +29,5 @@ from app.models.rapport_libelle import RapportLibelle                # noqa: F40
 from app.models.progression_config import ProgressionConfig          # noqa: F401
 from app.models.eleve_remplacement import EleveRemplacement          # noqa: F401
 from app.models.rapport_difficulte_resolution import RapportDifficulteResolution  # noqa: F401
+from app.models.rapport_journalier import RapportJournalierVersion    # noqa: F401
+from app.models.evaluation_resultat import EvaluationResultatHistorique  # noqa: F401

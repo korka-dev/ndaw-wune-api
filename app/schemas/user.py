@@ -1,10 +1,13 @@
 from __future__ import annotations
+from datetime import datetime
 
 import re
 import uuid
 from typing import List, Optional
 
 from pydantic import BaseModel, field_validator, model_validator
+
+from app.core.identifiers import normalize_email
 
 from app.models.user import UserGroupe, UserRole, UserStatus
 
@@ -72,6 +75,11 @@ class UserCreate(BaseModel):
             raise ValueError("Un e-mail ou un numéro de téléphone est requis.")
         return self
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def _email(cls, v):
+        return normalize_email(v)
+
 
 # ── Mise à jour ───────────────────────────────────────────────────────────────
 
@@ -94,6 +102,11 @@ class UserUpdate(BaseModel):
     @classmethod
     def normalize_phone(cls, v: Optional[str]) -> Optional[str]:
         return _normalize_sn_phone(v)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _email(cls, v):
+        return normalize_email(v)
 
 
 # ── Réinitialisation de mot de passe (admin) ──────────────────────────────────
@@ -149,6 +162,7 @@ class UserResponse(BaseModel):
     must_change_password: bool
     school:              Optional[SchoolBrief] = None
 
+    archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}
 
 

@@ -28,8 +28,10 @@ async def list_sessions(
     db: AsyncSession,
     skip: int = 0,
     limit: int = 50,
+    archives: bool = False,
 ) -> tuple[int, Sequence[ProgramSession]]:
-    base = select(ProgramSession).order_by(ProgramSession.date_debut.desc())
+    from app.services.archivage import non_archive
+    base = select(ProgramSession).where(non_archive(ProgramSession, archives)).order_by(ProgramSession.date_debut.desc())
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     items = (await db.execute(base.offset(skip).limit(limit))).scalars().all()
     return total, items
@@ -54,10 +56,10 @@ async def update_session(db: AsyncSession, session_id: uuid.UUID, body: SessionU
     return session
 
 
-async def delete_session(db: AsyncSession, session_id: uuid.UUID) -> None:
+async def delete_session(db: AsyncSession, session_id: uuid.UUID, actor=None, definitif: bool = False) -> dict:
+    from app.services import archivage
     session = await get_by_id(db, session_id)
-    await db.delete(session)
-    invalidate_sync_caches_after_commit(db)
+    return await archivage.supprimer_ou_archiver(db, session, actor, definitif)
 
 
 async def activate_session(db: AsyncSession, session_id: uuid.UUID) -> ProgramSession:

@@ -44,7 +44,7 @@ class EvaluationSujet(Base, UUIDMixin, TimestampMixin):
 
     # Relations
     tirages: Mapped[list["EvaluationTirage"]] = relationship(
-        "EvaluationTirage", back_populates="sujet", cascade="all, delete-orphan"
+        "EvaluationTirage", back_populates="sujet", passive_deletes="all"
     )
     creator: Mapped[Optional["User"]] = relationship("User", foreign_keys=[created_by])
     session: Mapped[Optional["ProgramSession"]] = relationship("ProgramSession", foreign_keys=[session_id])

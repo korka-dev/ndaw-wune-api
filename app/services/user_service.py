@@ -17,9 +17,11 @@ import logging
 
 from app.core.config import settings
 from app.core.redis import get_redis
+from app.core.identifiers import normalize_email
 from app.core.security import hash_password, verify_password
 from app.models.user import User, UserRole, UserStatus
 from app.schemas.user import UserCreate, UserUpdate
+from app.services.archivage import non_archive
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,9 @@ async def _assert_unique_credentials(
         return
 
     conditions = []
+    email = normalize_email(email)
     if email:
-        conditions.append(User.email == email)
+        conditions.append(func.lower(User.email) == email)
     if phone:
         conditions.append(User.phone == phone)
 
@@ -57,7 +60,7 @@ async def _assert_unique_credentials(
     if row is None:
         return
 
-    if email and row.email == email:
+    if email and normalize_email(row.email) == email:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cet e-mail est déjà utilisé.")
     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ce numéro de téléphone est déjà utilisé.")
 
@@ -123,8 +126,9 @@ async def list_by_role(
     role: UserRole,
     skip: int = 0,
     limit: int = 50,
+    archives: bool = False,
 ) -> tuple[int, Sequence[User]]:
-    base = select(User).where(User.role == role).order_by(User.name)
+    base = select(User).where(User.role == role, non_archive(User, archives)).order_by(User.name)
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     items = (await db.execute(
         base.options(selectinload(User.school)).offset(skip).limit(limit)
@@ -136,10 +140,11 @@ async def list_admin_accounts(
     db: AsyncSession,
     skip: int = 0,
     limit: int = 50,
+    archives: bool = False,
 ) -> tuple[int, Sequence[User]]:
     base = (
         select(User)
-        .where(User.role.in_([UserRole.admin, UserRole.coordonnateur]))
+        .where(User.role.in_([UserRole.admin, UserRole.coordonnateur]), non_archive(User, archives))
         .order_by(User.name)
     )
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
@@ -160,7 +165,7 @@ async def create_user(
     - must_change_password est toujours True à la création (premier login obligatoire).
     """
     if body.email:
-        body = body.model_copy(update={"email": body.email.strip().lower()})
+        body = body.model_copy(update={"email": normalize_email(body.email)})
     await _assert_unique_credentials(db, body.email, body.phone)
 
     password = body.password if body.password else _DEFAULT_PASSWORD
@@ -194,7 +199,7 @@ async def update_user(
 
     data = body.model_dump(exclude_none=True)
     if data.get("email"):
-        data["email"] = data["email"].strip().lower()
+        data["email"] = normalize_email(data["email"])
     email = data.get("email")
     phone = data.get("phone")
     if email or phone:
@@ -320,7 +325,10 @@ async def delete_user(
     actor: Optional[User] = None,
     allowed_roles: Optional[Sequence[UserRole]] = None,
     evaluateur_only: bool = False,
-) -> None:
+    definitif: bool = False,
+) -> dict:
+    """Archive le compte (APP-15) ; suppression physique seulement si
+    `definitif` et aucun historique rattaché."""
     if user_id == requestor_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -329,4 +337,19 @@ async def delete_user(
     user = await get_by_id(db, user_id)
     if actor is not None and allowed_roles is not None:
         assert_can_manage(actor, user, allowed_roles, evaluateur_only=evaluateur_only)
-    await db.delete(user)
+    from app.services import archivage
+    return await archivage.supprimer_ou_archiver(db, user, actor, definitif)
+
+
+async def restore_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    actor: Optional[User] = None,
+    allowed_roles: Optional[Sequence[UserRole]] = None,
+    evaluateur_only: bool = False,
+) -> dict:
+    user = await get_by_id(db, user_id)
+    if actor is not None and allowed_roles is not None:
+        assert_can_manage(actor, user, allowed_roles, evaluateur_only=evaluateur_only)
+    from app.services import archivage
+    return await archivage.restaurer(db, user, actor)

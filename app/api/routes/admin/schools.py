@@ -2,17 +2,18 @@ import csv
 import io
 import uuid
 from typing import Optional
-import openpyxl
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.core.deps import AdminUser, DB
-from app.core.upload_utils import read_upload_capped
+from app.core.upload_utils import read_upload_capped, iter_rows_capped, load_workbook_safe
 from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.school import School
 from app.schemas.school import SchoolCreate, SchoolUpdate, SchoolResponse
+from app.services import archivage
+from app.services.archivage import non_archive
 
 router = APIRouter(prefix="/schools", tags=["Admin — Écoles"])
 
@@ -33,8 +34,8 @@ async def _check_phone_unique(db, phone: str | None, exclude_id: uuid.UUID | Non
 
 
 @router.get("", response_model=Page[SchoolResponse])
-async def list_schools(db: DB, _: AdminUser, page: Pagination) -> Page[SchoolResponse]:
-    base  = select(School).order_by(School.name)
+async def list_schools(db: DB, _: AdminUser, page: Pagination, archives: bool = Query(False, description="Inclure les éléments archivés")) -> Page[SchoolResponse]:
+    base  = select(School).where(non_archive(School, archives)).order_by(School.name)
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     items = (await db.execute(base.offset(page.skip).limit(page.limit))).scalars().all()
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
@@ -146,12 +147,9 @@ async def reimport_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
     - Nouvelle école → créée
     """
     content = await read_upload_capped(file)
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    wb = load_workbook_safe(content)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     wb.close()
 
     if len(all_rows) < 2:
@@ -299,15 +297,17 @@ async def update_school(school_id: uuid.UUID, body: SchoolUpdate, db: DB, _: Adm
     return school
 
 
-@router.delete("/{school_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_school(school_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
-    result = await db.execute(select(School).where(School.id == school_id))
-    school = result.scalar_one_or_none()
-    if not school:
-        raise HTTPException(status_code=404, detail="École introuvable.")
-    await db.delete(school)
-    await db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{school_id}")
+async def delete_school(school_id: uuid.UUID, db: DB, current_user: AdminUser, definitif: bool = Query(False, description="Suppression physique, seulement sans historique (APP-15)")) -> dict:
+    """Archive l'école (APP-15) : élèves et observations conservés."""
+    school = await archivage.charger(db, School, school_id, "École introuvable.")
+    return await archivage.supprimer_ou_archiver(db, school, current_user, definitif)
+
+
+@router.post("/{school_id}/restaurer")
+async def restore_school(school_id: uuid.UUID, db: DB, current_user: AdminUser) -> dict:
+    school = await archivage.charger(db, School, school_id, "École introuvable.")
+    return await archivage.restaurer(db, school, current_user)
 
 
 # ── Import XLSX — format liste-élèves (IEF · COMMUNE · SCHOOL · …) ───────────
@@ -320,12 +320,9 @@ async def import_schools_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...)
     Les autres colonnes (enseignant, élève, etc.) sont ignorées.
     """
     content = await read_upload_capped(file)
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    wb = load_workbook_safe(content)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     wb.close()
 
     if not all_rows:

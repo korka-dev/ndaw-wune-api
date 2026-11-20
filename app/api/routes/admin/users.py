@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
@@ -14,9 +14,9 @@ router = APIRouter(prefix="/users", tags=["Admin — Comptes"])
 
 
 @router.get("", response_model=Page[UserResponse])
-async def list_users(db: DB, _: AdminUser, page: Pagination) -> Page[UserResponse]:
+async def list_users(db: DB, _: AdminUser, page: Pagination, archives: bool = Query(False, description="Inclure les éléments archivés")) -> Page[UserResponse]:
     """Liste les comptes admin et coordonnateur."""
-    total, items = await user_service.list_admin_accounts(db, page.skip, page.limit)
+    total, items = await user_service.list_admin_accounts(db, page.skip, page.limit, archives)
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 
@@ -71,12 +71,18 @@ async def reset_password(
     return await user_service.admin_reset_password(db, user_id, body.new_password, body.force_change)
 
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(user_id: uuid.UUID, db: DB, current_user: AdminUser) -> Response:
+@router.delete("/{user_id}")
+async def delete_user(user_id: uuid.UUID, db: DB, current_user: AdminUser, definitif: bool = Query(False, description="Suppression physique, seulement sans historique (APP-15)")) -> dict:
     if current_user.role != UserRole.admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Seul un administrateur peut supprimer des comptes.",
         )
-    await user_service.delete_user(db, user_id, current_user.id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return await user_service.delete_user(db, user_id, current_user.id, current_user, definitif=definitif)
+
+
+@router.post("/{user_id}/restaurer")
+async def restore_user(user_id: uuid.UUID, db: DB, current_user: AdminUser) -> dict:
+    if current_user.role != UserRole.admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Seul un administrateur peut restaurer des comptes.")
+    return await user_service.restore_user(db, user_id, current_user)

@@ -51,7 +51,18 @@ async def get_supervised_teacher_ids(db: AsyncSession, supervisor: User) -> list
     """
     assigned = _parse_assigned_ids(supervisor)
     if assigned:
-        return assigned
+        # APP-06 : une affectation ne vaut que pour des comptes enseignants
+        # existants, actifs et non archivés (un identifiant obsolète ne donne
+        # aucun droit).
+        rows = (await db.execute(
+            select(User.id).where(
+                User.id.in_(assigned),
+                User.role == UserRole.enseignant,
+                User.status == UserStatus.actif,
+                User.archived_at.is_(None),
+            )
+        )).scalars().all()
+        return list(rows)
 
     if supervisor.school_id is None or supervisor.school is None:
         logger.warning(
@@ -67,6 +78,7 @@ async def get_supervised_teacher_ids(db: AsyncSession, supervisor: User) -> list
                 User.role == UserRole.enseignant,
                 User.school_id.in_(school_ids),
                 User.status == UserStatus.actif,
+                User.archived_at.is_(None),
             )
         )
     ).scalars().all()
@@ -162,7 +174,7 @@ async def filter_supervised_eleve_ids(
         return set()
     rows = (
         await db.execute(
-            select(Eleve.id).where(Eleve.id.in_(eleve_ids), or_(*conditions))
+            select(Eleve.id).where(Eleve.id.in_(eleve_ids), Eleve.archived_at.is_(None), or_(*conditions))
         )
     ).scalars().all()
     return set(rows)

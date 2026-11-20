@@ -4,7 +4,9 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +23,8 @@ class SchoolClasse(Base, UUIDMixin, TimestampMixin):
     name:    Mapped[str]           = mapped_column(String(50),  nullable=False)   # ex : "CE1 A"
     niveau:  Mapped[str]           = mapped_column(String(20),  nullable=False)   # ex : "CE1"
     effectif: Mapped[Optional[int]] = mapped_column(nullable=True)                # nb élèves (info optionnelle)
+    # APP-15 : archivage (non NULL = archivé). Rien n'est supprimé avec l'historique.
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     school_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

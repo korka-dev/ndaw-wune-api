@@ -11,15 +11,17 @@ Routes :
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import DB, SuperviseurUser
 from app.models.supervisor_presence import SupervisorPresenceCheck
+from app.services.progression_service import active_session_for
 from app.services.supervisor_service import get_supervised_teacher_ids
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
@@ -30,15 +32,15 @@ router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 class PresenceEntryIn(BaseModel):
     teacher_id: str
     present:    bool
-    motif:      Optional[str] = None
+    motif:      Optional[str] = Field(default=None, max_length=1_000)
 
 
 class PresenceCheckIn(BaseModel):
     date_jour: str       # ISO YYYY-MM-DD
     # Période du programme choisie par le superviseur avant le pointage
-    semaine:    Optional[int] = None
-    jour_cours: Optional[int] = None
-    entries:   list[PresenceEntryIn]
+    semaine:    Optional[int] = Field(default=None, ge=1, le=53)
+    jour_cours: Optional[int] = Field(default=None, ge=1, le=7)
+    entries:   list[PresenceEntryIn] = Field(max_length=500)
 
 
 class PresenceEntryOut(BaseModel):
@@ -78,6 +80,11 @@ async def get_presence_check(
         )
     )).scalars().all()
 
+    # APP-06 : uniquement les enseignants actuellement supervisés.
+    if rows:
+        supervises = set(await get_supervised_teacher_ids(db, current_user))
+        rows = [r for r in rows if r.teacher_id in supervises]
+
     first = rows[0] if rows else None
     return PresenceCheckOut(
         date_jour=target_date.isoformat(),
@@ -108,15 +115,27 @@ async def submit_presence_check(
         target_date = date.fromisoformat(body.date_jour)
     except ValueError:
         raise HTTPException(status_code=422, detail=f"date_jour invalide : {body.date_jour}")
+    if target_date > date.today() + timedelta(days=1):
+        raise HTTPException(status_code=422, detail="date_jour ne peut pas être dans le futur.")
 
     # Validation complète avant toute écriture : chaque enseignant pointé doit
     # relever de ce superviseur (sinon refus, sans aucune mutation).
     parsed_entries = []
-    for entry in body.entries:
+    vus: dict[uuid.UUID, int] = {}
+    for i, entry in enumerate(body.entries):
         try:
-            parsed_entries.append((uuid.UUID(entry.teacher_id), entry))
+            tid = uuid.UUID(entry.teacher_id)
         except ValueError:
             raise HTTPException(status_code=422, detail=f"teacher_id invalide : {entry.teacher_id}")
+        if tid in vus:
+            # APP-29 : un doublon dans le lot est une erreur de saisie (422),
+            # pas une violation d'unicité en 500.
+            raise HTTPException(
+                status_code=422,
+                detail=f"Enseignant pointé deux fois dans le même lot (entrées {vus[tid]} et {i}).",
+            )
+        vus[tid] = i
+        parsed_entries.append((tid, entry))
     supervised = set(await get_supervised_teacher_ids(db, current_user))
     if any(tid not in supervised for tid, _ in parsed_entries):
         raise HTTPException(
@@ -126,6 +145,9 @@ async def submit_presence_check(
 
     now = datetime.now(timezone.utc)
     created = updated = 0
+    # Campagne de rattachement (APP-22) : session active à la réception.
+    active = await active_session_for(db, current_user)
+    session_id = active.id if active else None
 
     for teacher_uuid, entry in parsed_entries:
 
@@ -142,22 +164,44 @@ async def submit_presence_check(
             existing.motif     = entry.motif if not entry.present else None
             existing.semaine   = body.semaine
             existing.jour_cours = body.jour_cours
+            existing.session_id = existing.session_id or session_id
             existing.updated_at = now
             updated += 1
         else:
-            db.add(SupervisorPresenceCheck(
+            record = SupervisorPresenceCheck(
                 id=uuid.uuid4(),
                 superviseur_id=current_user.id,
                 teacher_id=teacher_uuid,
                 date_jour=target_date,
+                session_id=session_id,
                 semaine=body.semaine,
                 jour_cours=body.jour_cours,
                 present=entry.present,
                 motif=entry.motif if not entry.present else None,
                 created_at=now,
                 updated_at=now,
-            ))
-            created += 1
+            )
+            try:
+                async with db.begin_nested():  # envoi concurrent : l'unicité tranche
+                    db.add(record)
+                    await db.flush()
+                created += 1
+            except IntegrityError:
+                existing = (await db.execute(
+                    select(SupervisorPresenceCheck).where(
+                        SupervisorPresenceCheck.superviseur_id == current_user.id,
+                        SupervisorPresenceCheck.teacher_id     == teacher_uuid,
+                        SupervisorPresenceCheck.date_jour      == target_date,
+                    )
+                )).scalar_one_or_none()
+                if existing is None:
+                    raise
+                existing.present    = entry.present
+                existing.motif      = entry.motif if not entry.present else None
+                existing.semaine    = body.semaine
+                existing.jour_cours = body.jour_cours
+                existing.updated_at = now
+                updated += 1
 
     await db.flush()
     return {"created": created, "updated": updated, "total": created + updated}

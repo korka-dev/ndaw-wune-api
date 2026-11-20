@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
@@ -19,8 +19,8 @@ router = APIRouter(prefix="/sessions", tags=["Admin — Sessions"])
 
 
 @router.get("", response_model=Page[SessionResponse])
-async def list_sessions(db: DB, _: AdminUser, page: Pagination) -> Page[SessionResponse]:
-    total, items = await session_service.list_sessions(db, page.skip, page.limit)
+async def list_sessions(db: DB, _: AdminUser, page: Pagination, archives: bool = Query(False, description="Inclure les éléments archivés")) -> Page[SessionResponse]:
+    total, items = await session_service.list_sessions(db, page.skip, page.limit, archives)
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 
@@ -39,10 +39,16 @@ async def update_session(session_id: uuid.UUID, body: SessionUpdate, db: DB, _: 
     return await session_service.update_session(db, session_id, body)
 
 
-@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_session(session_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
-    await session_service.delete_session(db, session_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{session_id}")
+async def delete_session(session_id: uuid.UUID, db: DB, current_user: AdminUser, definitif: bool = Query(False, description="Suppression physique, seulement sans historique (APP-15)")) -> dict:
+    """Archive la campagne (APP-15) : séances, rapports et évaluations conservés."""
+    return await session_service.delete_session(db, session_id, current_user, definitif)
+
+
+@router.post("/{session_id}/restaurer")
+async def restore_session(session_id: uuid.UUID, db: DB, current_user: AdminUser) -> dict:
+    from app.services import archivage
+    return await archivage.restaurer(db, await session_service.get_by_id(db, session_id), current_user)
 
 
 @router.post("/{session_id}/activate", response_model=SessionResponse)

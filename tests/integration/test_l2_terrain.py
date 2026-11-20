@@ -13,7 +13,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.audit_log import AuditLog
 from app.models.rapport_journalier import RapportJournalier
 from app.models.seance import Seance, SeanceStatus
-from app.models.session import ProgramSession
+from app.models.session import ProgramSession, SessionStatus
 from app.models.user import UserRole
 from app.services.seance_service import close_stale_seances
 
@@ -24,7 +24,8 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 async def _session(tag: str) -> ProgramSession:
     async with AsyncSessionLocal() as s:
-        ps = ProgramSession(name=f"Session {tag}", date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31))
+        ps = ProgramSession(name=f"Session {tag}", date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31),
+                            status=SessionStatus.active)
         s.add(ps)
         await s.commit()
         await s.refresh(ps)
@@ -127,7 +128,9 @@ async def test_cloture_rejouee_et_rapport_rejoue(client, tag):  # APP-16
     u = await create_user(UserRole.enseignant, tag)
     h = bearer(await login(client, u))
     ps = await _session(tag)
-    sid = (await client.post("/api/v1/app/seances/start", headers=h, json=_start(ps.id))).json()["id"]
+    debut = datetime.now(timezone.utc) - timedelta(minutes=50)
+    sid = (await client.post("/api/v1/app/seances/start", headers=h,
+                             json=_start(ps.id, started_at=debut.isoformat(), date_seance=debut.isoformat()))).json()["id"]
     fin = {"finished_at": datetime.now(timezone.utc).isoformat(), "duree_minutes": 45}
     assert (await client.post(f"/api/v1/app/seances/{sid}/finish", headers=h, json=fin)).status_code == 200
     # Réponse perdue → renvoi identique : succès, pas d'échec affiché

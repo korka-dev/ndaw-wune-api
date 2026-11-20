@@ -35,18 +35,22 @@ class SupervisorPresenceCheck(Base, UUIDMixin, TimestampMixin):
 
     superviseur_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     teacher_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     date_jour: Mapped[date]            = mapped_column(Date, nullable=False, index=True)
     # Période du programme (choisie par le superviseur avant le pointage)
+    # Campagne active du superviseur à la réception (APP-22) ; NULL = historique à arbitrer.
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("program_sessions.id", ondelete="RESTRICT"), nullable=True, index=True,
+    )
     semaine:    Mapped[Optional[int]]  = mapped_column(Integer, nullable=True)
     jour_cours: Mapped[Optional[int]]  = mapped_column(Integer, nullable=True)
     present:   Mapped[bool]            = mapped_column(Boolean, nullable=False)

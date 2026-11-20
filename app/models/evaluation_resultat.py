@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import date as date_type
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,7 +33,7 @@ class EvaluationResultat(Base, UUIDMixin, TimestampMixin):
 
     tirage_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("evaluation_tirages.id", ondelete="CASCADE"),
+        ForeignKey("evaluation_tirages.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -48,3 +49,34 @@ class EvaluationResultat(Base, UUIDMixin, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<EvaluationResultat tirage={self.tirage_id} {self.date_eval} {self.resultat}>"
+
+
+
+class EvaluationResultatHistorique(Base, UUIDMixin):
+    """État d'un résultat daté avant sa correction le même jour (APP-30).
+
+    Chaque audio est un fichier immuable (nom unique par envoi) ; ses
+    références successives restent ici, si bien qu'une correction ne fait
+    jamais disparaître l'enregistrement antérieur.
+    """
+    __tablename__ = "evaluation_resultat_historique"
+
+    resultat_id:    Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("evaluation_resultats.id", ondelete="RESTRICT"), nullable=False, index=True,
+    )
+    tirage_id:      Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("evaluation_tirages.id", ondelete="RESTRICT"), nullable=False, index=True,
+    )
+    superviseur_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    resultat:       Mapped[str]           = mapped_column(String(30), nullable=False)
+    commentaire:    Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    audio_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    observe_at:     Mapped[datetime]      = mapped_column(DateTime(timezone=True), nullable=False)  # horodatage de l'état remplacé
+    remplace_at:    Mapped[datetime]      = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+    )
+    remplace_par_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )

@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, List
 from pydantic import BaseModel, field_validator, model_validator
 from app.models.session import SessionStatus
@@ -43,6 +43,7 @@ class SessionResponse(BaseModel):
     status:      SessionStatus
     description: Optional[str]
 
+    archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}
 
 

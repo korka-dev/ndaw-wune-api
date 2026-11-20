@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -29,7 +29,7 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
 
     teacher_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -73,8 +73,61 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
     client_op_id:   Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     client_op_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    # ── Campagne (APP-22) ────────────────────────────────────────────────────
+    # Session active du tuteur au moment de la réception. NULL pour l'historique
+    # antérieur, dont le rattachement reste à arbitrer (pas de déduction).
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("program_sessions.id", ondelete="RESTRICT"), nullable=True, index=True,
+    )
+
+    # ── Cycle de vie (APP-31) ────────────────────────────────────────────────
+    # soumis → corrige (nouvelle version, motif) → annule (motif). Jamais
+    # supprimé : chaque état antérieur est conservé dans rapport_journalier_versions.
+    statut:        Mapped[str]                 = mapped_column(String(20), nullable=False, default="soumis",
+                                                               server_default="soumis", index=True)
+    version:       Mapped[int]                 = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    statut_motif:  Mapped[Optional[str]]       = mapped_column(Text, nullable=True)
+    statut_par_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    statut_at:     Mapped[Optional[datetime]]  = mapped_column(DateTime(timezone=True), nullable=True)
+
     # ── Relations ─────────────────────────────────────────────────────────────
-    teacher: Mapped["User"] = relationship("User")
+    teacher: Mapped["User"] = relationship("User", foreign_keys=[teacher_id])
 
     def __repr__(self) -> str:
         return f"<RapportJournalier {self.date_rapport} [{self.ecole}]>"
+
+
+STATUTS_RAPPORT = ("soumis", "corrige", "annule")
+
+
+class RapportJournalierVersion(Base, UUIDMixin):
+    """État antérieur d'un rapport journalier, figé avant chaque correction ou
+    annulation (APP-31). Les photos ne sont pas recopiées (elles restent sur
+    le rapport et ne sont pas modifiables)."""
+    __tablename__ = "rapport_journalier_versions"
+    __table_args__ = (
+        UniqueConstraint("rapport_id", "version", name="uq_rapport_journalier_version"),
+    )
+
+    rapport_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("rapports_journalier.id", ondelete="RESTRICT"), nullable=False, index=True,
+    )
+    version:    Mapped[int]                 = mapped_column(Integer, nullable=False)
+    statut:     Mapped[str]                 = mapped_column(String(20), nullable=False)
+    contenu:    Mapped[dict]                = mapped_column(JSONB, nullable=False)
+    # Ce qui a provoqué le remplacement de cette version.
+    action:     Mapped[str]                 = mapped_column(String(20), nullable=False)  # correction | annulation
+    motif:      Mapped[str]                 = mapped_column(Text, nullable=False)
+    auteur_id:  Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    created_at: Mapped[datetime]            = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc),
+    )
+
+
+# Règle commune (APP-31) : un rapport annulé reste consultable (liste, export,
+# historique) mais ne compte plus dans les indicateurs ni la progression.
+RAPPORT_COMPTE = RapportJournalier.statut != "annule"

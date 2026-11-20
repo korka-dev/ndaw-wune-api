@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Sequence
+from typing import Optional, Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.audit_log import AuditLog
 from app.models.seance import RapportProf, Seance, SeanceStatus
 from app.schemas.seance import (
-    RapportCreate, SeanceComplete, SeanceFinish, SeanceMissedReport, SeancePauseBody,
+    RapportCreate, SeanceComplete, SeanceFinish, SeanceMissedReport, SeancePauseBody, check_coherence_seance,
     SeanceRecovery, SeanceResumeBody, SeanceStart,
 )
 
@@ -108,6 +108,9 @@ async def report_missed_seance(
         if existing:
             return existing
 
+    await verifier_campagne(db, teacher_id, body.session_id, body.planning_segment_id,
+                            body.classe, body.date_seance, tardif=True)
+
     seance = Seance(
         teacher_id          = teacher_id,
         session_id          = body.session_id,
@@ -136,6 +139,80 @@ async def get_active_seance(db: AsyncSession, teacher_id: uuid.UUID) -> Seance |
     return result.scalar_one_or_none()
 
 
+# Délai de transmission accepté après la fin d'une campagne pour une séance
+# faite hors ligne (APP-22, envois tardifs) — à valider par l'ARED.
+DELAI_ENVOI_TARDIF_JOURS = 14
+
+
+def _norm_classe(v: Optional[str]) -> str:
+    return " ".join((v or "").split()).lower()
+
+
+async def verifier_campagne(
+    db: AsyncSession,
+    teacher_id: uuid.UUID,
+    session_id: uuid.UUID,
+    planning_segment_id: Optional[uuid.UUID],
+    classe: Optional[str],
+    date_seance: datetime,
+    *,
+    tardif: bool,
+) -> None:
+    """Contrôles serveur d'une séance (rapport V2, APP-22).
+
+    - campagne existante et non archivée ; active pour un démarrage en direct ;
+      pour un envoi tardif (hors ligne), la date de la séance doit tomber dans
+      la campagne (+ délai de transmission) ;
+    - tuteur affecté à la campagne quand il a des affectations ;
+    - créneau appartenant à la campagne (et au tuteur s'il est nominatif) ;
+    - classe du créneau, sinon une classe du tuteur.
+    Refus explicite (409/422) : rien n'est enregistré.
+    """
+    from app.models.planning import PlanningSegment
+    from app.models.session import ProgramSession, SessionStatus, TeacherSession
+    from app.models.user import User
+
+    def refus(code: str, message: str, http: int = 422):
+        return HTTPException(status_code=http, detail={"code": code, "message": message})
+
+    session = await db.get(ProgramSession, session_id)
+    if session is None:
+        raise refus("CAMPAGNE_INCONNUE", "Campagne introuvable.")
+    if session.archived_at is not None:
+        raise refus("CAMPAGNE_ARCHIVEE", "Cette campagne est archivée : aucune séance ne peut y être ajoutée.",
+                    status.HTTP_409_CONFLICT)
+    if session.status != SessionStatus.active:
+        jour = date_seance.date() if isinstance(date_seance, datetime) else date_seance
+        dans_periode = session.date_debut <= jour <= session.date_fin + timedelta(days=DELAI_ENVOI_TARDIF_JOURS)
+        if not (tardif and dans_periode):
+            raise refus("CAMPAGNE_INACTIVE", "Cette campagne n'est pas active : synchronisez l'application.",
+                        status.HTTP_409_CONFLICT)
+
+    affectations = set((await db.execute(
+        select(TeacherSession.session_id).where(TeacherSession.teacher_id == teacher_id)
+    )).scalars().all())
+    if affectations and session_id not in affectations:
+        raise refus("CAMPAGNE_NON_AFFECTEE", "Vous n'êtes pas affecté(e) à cette campagne.", status.HTTP_403_FORBIDDEN)
+
+    classe_attendue: Optional[str] = None
+    if planning_segment_id is not None:
+        seg = await db.get(PlanningSegment, planning_segment_id)
+        if seg is None or seg.session_id != session_id or (seg.teacher_id and seg.teacher_id != teacher_id):
+            raise refus("CRENEAU_INVALIDE", "Ce créneau n'appartient pas à votre planning de cette campagne.")
+        classe_attendue = seg.classe
+
+    c = _norm_classe(classe)
+    if c and c != "—":
+        if classe_attendue:
+            if c != _norm_classe(classe_attendue):
+                raise refus("CLASSE_NON_AFFECTEE", f"La classe « {classe} » ne correspond pas au créneau.")
+        else:
+            teacher = await db.get(User, teacher_id)
+            classes = {_norm_classe(x) for x in (teacher.classes or [])} if teacher else set()
+            if classes and c not in classes:
+                raise refus("CLASSE_NON_AFFECTEE", f"La classe « {classe} » ne vous est pas affectée.")
+
+
 async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStart) -> Seance:
     """Démarre le timer. Lève 409 si une séance est déjà en cours."""
     logger.info(
@@ -151,6 +228,9 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
             deja = await _get_by_client_id(db, teacher_id, body.client_seance_id)
             if deja is not None:
                 return deja
+
+        await verifier_campagne(db, teacher_id, body.session_id, body.planning_segment_id,
+                                body.classe, body.date_seance, tardif=False)
 
         await close_stale_seances(db, teacher_id)
         existing = await get_active_seance(db, teacher_id)
@@ -311,6 +391,12 @@ async def finish_seance(
                 detail="Cette séance n'est plus en cours.",
             )
 
+        def _refus(msg: str):
+            return HTTPException(status_code=422, detail=msg)
+
+        check_coherence_seance(seance.started_at, body.finished_at, body.duree_minutes,
+                               body.nb_eleves_presents, seance.nb_eleves_total, exc=_refus)
+
         # En cours, ou clôturée sans durée (automatique / récupération) : l'arrêt
         # réel du minuteur, même tardif, est la seule durée mesurée (APP-21).
         tardive = seance.status == SeanceStatus.terminee
@@ -386,6 +472,8 @@ async def complete_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceC
             ))
         return seance
 
+    await verifier_campagne(db, teacher_id, body.session_id, body.planning_segment_id,
+                            body.classe, body.date_seance, tardif=True)
     start = body.model_dump(include=set(SeanceStart.model_fields))
     seance = Seance(
         teacher_id=teacher_id,

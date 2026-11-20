@@ -5,13 +5,13 @@ import io
 import uuid
 from typing import Optional
 
-import openpyxl
-from fastapi import APIRouter, Body, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import func, or_, select
 
 from app.core.deps import AdminUser, DB
-from app.core.upload_utils import read_upload_capped
+from app.core.identifiers import normalize_email
+from app.core.upload_utils import read_upload_capped, iter_rows_capped, load_workbook_safe
 from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.core.security import hash_password
@@ -24,8 +24,8 @@ router = APIRouter(prefix="/teachers", tags=["Admin — Enseignants"])
 
 
 @router.get("", response_model=Page[UserResponse])
-async def list_teachers(db: DB, _: AdminUser, page: Pagination) -> Page[UserResponse]:
-    total, items = await user_service.list_by_role(db, UserRole.enseignant, page.skip, page.limit)
+async def list_teachers(db: DB, _: AdminUser, page: Pagination, archives: bool = Query(False, description="Inclure les éléments archivés")) -> Page[UserResponse]:
+    total, items = await user_service.list_by_role(db, UserRole.enseignant, page.skip, page.limit, archives)
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
 
 
@@ -153,12 +153,9 @@ async def import_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
       5. Création des nouveaux enseignants en lot (flush toutes les 200 entités)
     """
     content = await read_upload_capped(file)
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    wb = load_workbook_safe(content)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     wb.close()
 
     if not all_rows:
@@ -330,12 +327,9 @@ async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(.
     - Conflit phone unique → signalé dans errors, ligne ignorée sans planter le reste
     """
     content = await read_upload_capped(file)
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    wb = load_workbook_safe(content)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     wb.close()
 
     if len(all_rows) < 2:
@@ -392,6 +386,12 @@ async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(.
         if t.phone
     }
 
+    # Index e-mail normalisé → id, sur TOUS les comptes (APP-35)
+    email_to_id: dict[str, str] = {
+        normalize_email(e): str(i)
+        for i, e in (await db.execute(select(User.id, User.email).where(User.email.is_not(None)))).all()
+    }
+
     updated = 0
     created = 0
     skipped = 0
@@ -405,13 +405,20 @@ async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(.
 
         phone   = col(row, "phone")   or None
         titre   = col(row, "titre")   or None
-        email   = col(row, "email")   or None
+        email   = normalize_email(col(row, "email"))
         niv_raw = col(row, "niveaux")
         niveaux = [n.strip() for n in niv_raw.split(",") if n.strip()] if niv_raw else None
         cls_raw = col(row, "classes")
         classes = [c.strip() for c in cls_raw.split(",") if c.strip()] if cls_raw else None
 
         existing = teacher_by_name.get(name.strip().upper())
+
+        if email:
+            owner = email_to_id.get(email)
+            if owner and (existing is None or owner != str(existing.id)):
+                errors.append(f"Ligne {line_num} — {name} : l'e-mail {email} est déjà utilisé par un autre compte.")
+                skipped += 1
+                continue
 
         if existing:
             changed = False
@@ -433,8 +440,11 @@ async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(.
             if titre and titre != (existing.title or ""):
                 existing.title = titre
                 changed = True
-            if email and email != (existing.email or ""):
+            if email and email != normalize_email(existing.email):
+                if existing.email:
+                    email_to_id.pop(normalize_email(existing.email), None)
                 existing.email = email
+                email_to_id[email] = str(existing.id)
                 changed = True
             if niveaux is not None and niveaux != (existing.niveau or []):
                 existing.niveau = niveaux
@@ -481,6 +491,8 @@ async def reimport_teachers_xlsx(db: DB, _: AdminUser, file: UploadFile = File(.
             db.add(new_user)
             teacher_by_name[name.strip().upper()] = new_user
             phone_to_id[phone] = "new"
+            if email:
+                email_to_id[email] = "new"
             created += 1
 
     if updated or created:
@@ -508,7 +520,8 @@ async def bulk_delete_teachers(
     ids: list[uuid.UUID] = Body(..., embed=True),
 ) -> dict:
     """
-    Supprime plusieurs enseignants en une seule requête.
+    Archive plusieurs enseignants en une seule requête (APP-15 : leurs
+    séances et rapports sont conservés ; restauration possible).
     Corps attendu : { "ids": ["uuid1", "uuid2", ...] }
     """
     if not ids:
@@ -518,18 +531,26 @@ async def bulk_delete_teachers(
     # Empêcher l'auto-suppression
     ids_filtered = [i for i in ids if i != current_user.id]
     from app.models.user import User
-    # Seuls les comptes enseignants sont supprimables par cette route
-    result = await db.execute(
-        delete(User).where(User.id.in_(ids_filtered), User.role == UserRole.enseignant)
+    from app.services import archivage
+    # Seuls les comptes enseignants sont concernés par cette route
+    users = (await db.execute(
+        select(User).where(User.id.in_(ids_filtered), User.role == UserRole.enseignant)
+    )).scalars().all()
+    for u in users:
+        await archivage.archiver(db, u, current_user)
+    return {"archived": len(users), "deleted": 0}
+
+
+@router.delete("/{teacher_id}")
+async def delete_teacher(teacher_id: uuid.UUID, db: DB, current_user: AdminUser, definitif: bool = Query(False, description="Suppression physique, seulement sans historique (APP-15)")) -> dict:
+    return await user_service.delete_user(
+        db, teacher_id, current_user.id, current_user, (UserRole.enseignant,), definitif=definitif,
     )
-    await db.commit()
-    return {"deleted": result.rowcount}
 
 
-@router.delete("/{teacher_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_teacher(teacher_id: uuid.UUID, db: DB, current_user: AdminUser) -> Response:
-    await user_service.delete_user(db, teacher_id, current_user.id, current_user, (UserRole.enseignant,))
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/{teacher_id}/restaurer")
+async def restore_teacher(teacher_id: uuid.UUID, db: DB, current_user: AdminUser) -> dict:
+    return await user_service.restore_user(db, teacher_id, current_user, (UserRole.enseignant,))
 
 
 @router.post("/{teacher_id}/toggle-status", response_model=UserResponse)

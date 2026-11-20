@@ -32,13 +32,13 @@ class Seance(Base, UUIDMixin, TimestampMixin):
 
     teacher_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("program_sessions.id", ondelete="CASCADE"),
+        ForeignKey("program_sessions.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -100,7 +100,7 @@ class Seance(Base, UUIDMixin, TimestampMixin):
         "RapportProf",
         back_populates="seance",
         uselist=False,
-        cascade="all, delete-orphan",
+        passive_deletes="all",  # historique conservé (APP-15)
     )
 
     def __repr__(self) -> str:
@@ -113,14 +113,14 @@ class RapportProf(Base, UUIDMixin, TimestampMixin):
 
     seance_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("seances.id", ondelete="CASCADE"),
+        ForeignKey("seances.id", ondelete="RESTRICT"),
         nullable=False,
         unique=True,    # contrainte : 1 rapport maximum par séance
         index=True,
     )
     teacher_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

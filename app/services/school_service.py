@@ -36,13 +36,34 @@ def normalize_school_name(name: str) -> str:
     return s
 
 
+def _compatible(a: School, b: School) -> bool:
+    """APP-23 : deux fiches de même nom ne désignent la même école que si rien
+    ne les distingue : codes, communes et IEF égaux quand ils sont renseignés
+    des deux côtés. Deux homonymes de communes différentes restent isolées."""
+    if a.code_ecole is not None and b.code_ecole is not None and a.code_ecole != b.code_ecole:
+        return False
+    for champ in ("city", "region"):
+        va, vb = getattr(a, champ), getattr(b, champ)
+        if va and vb and normalize_school_name(va) != normalize_school_name(vb):
+            return False
+    return True
+
+
 async def get_matching_school_ids(db: AsyncSession, school: School) -> list[uuid.UUID]:
-    """IDs de toutes les écoles portant le même nom normalisé que `school` —
-    couvre les doublons créés à l'import, sur lesquels enseignants, élèves et
-    superviseur peuvent être rattachés séparément."""
+    """IDs des fiches qui désignent la même école que `school` — couvre les
+    doublons créés à l'import, sur lesquels enseignants, élèves et superviseur
+    peuvent être rattachés séparément.
+
+    Rapport V2, APP-23 : jamais sur le seul nom. Même nom normalisé ET aucun
+    élément géographique contradictoire (code école, commune, IEF). Les
+    groupes ambigus sont listés par scripts/doublons_ecoles.py pour arbitrage.
+    """
     target = normalize_school_name(school.name or "")
     if not target:
         return [school.id]
-    rows = (await db.execute(select(School.id, School.name))).all()
-    matches = [sid for sid, name in rows if normalize_school_name(name or "") == target]
+    rows = (await db.execute(select(School))).scalars().all()
+    matches = [
+        s.id for s in rows
+        if s.id == school.id or (normalize_school_name(s.name or "") == target and _compatible(school, s))
+    ]
     return matches or [school.id]

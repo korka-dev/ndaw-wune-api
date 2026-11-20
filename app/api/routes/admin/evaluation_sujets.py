@@ -339,12 +339,26 @@ async def retirage_sujet(sujet_id: uuid.UUID, db: DB, _: AdminUser) -> SujetOut:
 
 @router.delete("/{sujet_id}")
 async def delete_sujet(sujet_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
-    """Supprime un sujet (et ses tirages en cascade)."""
+    """Supprime un sujet sans tirage. Avec des tirages (élèves tirés, résultats),
+    refus 409 : l'historique d'évaluation n'est jamais effacé (APP-15)."""
     sujet = (await db.execute(
         select(EvaluationSujet).where(EvaluationSujet.id == sujet_id)
     )).scalar_one_or_none()
     if sujet is None:
         raise HTTPException(status_code=404, detail="Sujet introuvable.")
+    nb_tirages = (await db.execute(
+        select(func.count()).select_from(EvaluationTirage).where(EvaluationTirage.sujet_id == sujet_id)
+    )).scalar_one()
+    if nb_tirages:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HISTORIQUE_PRESENT",
+                "message": f"Ce sujet a {nb_tirages} tirage(s) d'élèves : suppression impossible, "
+                           "l'historique d'évaluation est conservé.",
+                "historique": {"tirages": nb_tirages},
+            },
+        )
     await db.delete(sujet)
     await db.commit()
     return Response(status_code=204)

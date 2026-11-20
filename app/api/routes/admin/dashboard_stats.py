@@ -25,7 +25,7 @@ from app.models.eleve_remplacement import EleveRemplacement
 from app.models.evaluation_eleve import EvaluationEleve
 from app.models.evaluation_competence import EvaluationCompetence
 from app.models.evaluation_doc import EvaluationDoc
-from app.models.rapport_journalier import RapportJournalier
+from app.models.rapport_journalier import RAPPORT_COMPTE, RapportJournalier
 from app.models.user import User, UserRole, UserStatus
 
 router = APIRouter(prefix="/dashboard", tags=["Admin — Dashboard"])
@@ -133,7 +133,7 @@ async def dashboard_stats(_: AdminUser, db: DB) -> DashboardStats:
             select(func.count()).select_from(RapportProf).scalar_subquery().label("rapports"),
             select(func.count()).select_from(SchoolClasse).scalar_subquery().label("classes_total"),
             select(func.count()).select_from(EvaluationEleve).scalar_subquery().label("evaluations_total"),
-            select(func.count()).select_from(RapportJournalier)
+            select(func.count()).select_from(RapportJournalier).where(RAPPORT_COMPTE)
                 .scalar_subquery().label("rapports_journaliers_total"),
             select(func.count()).select_from(EleveRemplacement)
                 .scalar_subquery().label("remplacements_total"),

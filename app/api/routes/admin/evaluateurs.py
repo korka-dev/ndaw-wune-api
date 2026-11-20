@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 from sqlalchemy import select
 
 from app.core.deps import AdminUser, DB
@@ -15,6 +15,7 @@ from app.core.pagination import Page, Pagination
 from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.services import user_service
+from app.services.archivage import non_archive
 
 router = APIRouter(prefix="/evaluateurs", tags=["Admin — Évaluateurs"])
 
@@ -24,14 +25,14 @@ def _is_evaluateur(user: User) -> bool:
 
 
 @router.get("", response_model=Page[UserResponse])
-async def list_evaluateurs(db: DB, _: AdminUser, page: Pagination) -> Page[UserResponse]:
+async def list_evaluateurs(db: DB, _: AdminUser, page: Pagination, archives: bool = Query(False, description="Inclure les éléments archivés")) -> Page[UserResponse]:
     """Liste tous les utilisateurs dont le title = 'evaluateur'."""
     from sqlalchemy import func
     from app.core.database import Base  # noqa
 
     base = (
         select(User)
-        .where(User.role == UserRole.coordonnateur, User.title == "evaluateur")
+        .where(User.role == UserRole.coordonnateur, User.title == "evaluateur", non_archive(User, archives))
         .order_by(User.name)
     )
     from sqlalchemy import func as sqlfunc
@@ -63,14 +64,21 @@ async def update_evaluateur(
     )
 
 
-@router.delete("/{evaluateur_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{evaluateur_id}")
 async def delete_evaluateur(
-    evaluateur_id: uuid.UUID, db: DB, current_user: AdminUser
-) -> Response:
-    await user_service.delete_user(
-        db, evaluateur_id, current_user.id, current_user, (UserRole.coordonnateur,), evaluateur_only=True
+    evaluateur_id: uuid.UUID, db: DB, current_user: AdminUser, definitif: bool = Query(False, description="Suppression physique, seulement sans historique (APP-15)")
+) -> dict:
+    return await user_service.delete_user(
+        db, evaluateur_id, current_user.id, current_user, (UserRole.coordonnateur,),
+        evaluateur_only=True, definitif=definitif,
     )
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{evaluateur_id}/restaurer")
+async def restore_evaluateur(evaluateur_id: uuid.UUID, db: DB, current_user: AdminUser) -> dict:
+    return await user_service.restore_user(
+        db, evaluateur_id, current_user, (UserRole.coordonnateur,), evaluateur_only=True,
+    )
 
 
 @router.post("/{evaluateur_id}/toggle-status", response_model=UserResponse)

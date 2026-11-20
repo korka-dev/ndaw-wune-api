@@ -4,16 +4,17 @@ import logging
 import re
 import uuid
 from datetime import datetime as _dt
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, select, true
 
 from app.core.export_utils import sanitize_cell
-from app.core.upload_utils import read_upload_capped
+from app.core.upload_utils import read_upload_capped, iter_rows_capped, load_workbook_safe
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
 from app.core.redis import invalidate_sync_caches as _invalidate_sync_caches
 from app.models.planning import PlanningSegment
+from app.models.session import ProgramSession
 from app.models.user import User
 from app.schemas.planning import (
     PlanningSegmentCreate, PlanningSegmentUpdate,
@@ -91,24 +92,10 @@ def _parse_excel(content: bytes) -> tuple[list[dict], list[dict]]:
     """Retourne (segments, errors) depuis un fichier Excel (.xlsx, .xls) via openpyxl."""
     import datetime
 
-    try:
-        import openpyxl
-    except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="La bibliothèque openpyxl n'est pas installée sur le serveur.",
-        )
+    wb = load_workbook_safe(content)
+    ws = wb.active
 
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-        ws = wb.active
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Impossible de lire le fichier Excel : {e}",
-        )
-
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     if not all_rows:
         raise HTTPException(status_code=400, detail="Fichier Excel vide.")
 
@@ -307,8 +294,11 @@ async def export_planning_csv(
     _: AdminUser,
     session_id: uuid.UUID | None = None,
     semaine: int | None = None,
+    jour: int | None = Query(None, ge=0, le=6),
+    matiere: str | None = None,
 ) -> StreamingResponse:
-    """Export CSV du planning (mêmes filtres que la liste, SANS pagination d'écran).
+    """Export CSV du planning (mêmes filtres que l'écran — campagne, semaine,
+    jour, matière — SANS pagination ; rapport V2, APP-34).
     Colonnes compatibles avec l'import : semaine, jour, heure_debut, heure_fin, classe, matiere."""
     q = select(PlanningSegment).order_by(
         PlanningSegment.semaine.nulls_first(), PlanningSegment.jour, PlanningSegment.heure_debut
@@ -317,6 +307,10 @@ async def export_planning_csv(
         q = q.where(PlanningSegment.session_id == session_id)
     if semaine is not None:
         q = q.where(PlanningSegment.semaine == semaine)
+    if jour is not None:
+        q = q.where(PlanningSegment.jour == jour)
+    if matiere:
+        q = q.where(PlanningSegment.matiere == matiere)
     segments = (await db.execute(q)).scalars().all()
 
     buf = io.StringIO()
@@ -384,11 +378,22 @@ async def import_planning(
     db: DB,
     _: AdminUser,
     session_id: uuid.UUID,
-    semaine: int | None = None,
+    semaine: int | None = Query(None, ge=1, le=53),
+    dry_run: bool = Query(False, description="Aperçu : rien n'est modifié."),
+    accepter_erreurs: bool = Query(
+        False, description="Confirme le remplacement même si des lignes du fichier sont invalides.",
+    ),
     file: UploadFile = File(...),
 ):
     """
-    Importe un planning depuis un fichier PDF, Excel ou CSV.
+    Importe un planning depuis un fichier PDF, Excel ou CSV (rapport V2, APP-26).
+
+    Tout le fichier est validé avant la moindre modification. Le planning
+    existant n'est jamais touché si : le fichier ne contient aucun créneau
+    valide ; `dry_run=true` (aperçu du périmètre et des créneaux) ; des lignes
+    sont invalides et `accepter_erreurs` n'est pas confirmé (409
+    `PLANNING_IMPORT_PARTIEL`). Le remplacement se fait dans une transaction
+    unique, limité à la campagne et à la semaine annoncées.
     Si `semaine` est fournie, le planning importé est rattaché à cette semaine
     et seul le planning existant de cette semaine est remplacé.
 
@@ -419,6 +424,11 @@ async def import_planning(
             # Les parseurs retournent des strings "HH:MM" — asyncpg exige datetime.time
             seg_data["heure_debut"] = _dt.strptime(seg_data["heure_debut"], "%H:%M").time()
             seg_data["heure_fin"]   = _dt.strptime(seg_data["heure_fin"],   "%H:%M").time()
+            if seg_data["heure_fin"] <= seg_data["heure_debut"]:
+                raise ValueError(
+                    f"l'heure de fin ({seg_data['heure_fin']:%H:%M}) doit suivre "
+                    f"l'heure de début ({seg_data['heure_debut']:%H:%M})."
+                )
             valides.append(seg_data)
         except Exception as exc:
             errors.append({"row": "-", "error": str(exc)})
@@ -432,11 +442,42 @@ async def import_planning(
             },
         )
 
-    # Remplacement (limité à la semaine si fournie), dans la même transaction que l'insertion
-    del_stmt = delete(PlanningSegment).where(PlanningSegment.session_id == session_id)
-    if semaine is not None:
-        del_stmt = del_stmt.where(PlanningSegment.semaine == semaine)
-    await db.execute(del_stmt)
+    session = await db.get(ProgramSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Campagne introuvable : planning non modifié.")
+
+    perimetre = and_(PlanningSegment.session_id == session_id,
+                     PlanningSegment.semaine == semaine if semaine is not None else true())
+    remplaces = (await db.execute(select(func.count()).select_from(PlanningSegment).where(perimetre))).scalar_one()
+    apercu = {
+        "dry_run": dry_run,
+        "session_id": str(session_id),
+        "session_nom": session.name,
+        "semaine": semaine,
+        "perimetre": f"{session.name} — " + (f"semaine {semaine}" if semaine is not None else "toutes les semaines"),
+        "a_remplacer": remplaces,
+        "valides": len(valides),
+        "segments": [
+            {**seg, "heure_debut": seg["heure_debut"].strftime("%H:%M"), "heure_fin": seg["heure_fin"].strftime("%H:%M")}
+            for seg in valides[:200]
+        ],
+        "errors": errors,
+    }
+    if dry_run:
+        return apercu
+    if errors and not accepter_erreurs:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PLANNING_IMPORT_PARTIEL",
+                "message": f"{len(errors)} ligne(s) invalide(s) : confirmez pour remplacer le planning par les "
+                           f"{len(valides)} créneau(x) valide(s), ou corrigez le fichier. Planning non modifié.",
+                **apercu,
+            },
+        )
+
+    # Remplacement limité au périmètre annoncé, dans la même transaction que l'insertion
+    await db.execute(delete(PlanningSegment).where(perimetre))
 
     imported = 0
     for seg_data in valides:
@@ -454,4 +495,4 @@ async def import_planning(
             detail="Erreur lors de la sauvegarde du planning. Veuillez réessayer.",
         )
 
-    return {"imported": imported, "errors": errors}
+    return {"imported": imported, "replaced": remplaces, "errors": errors, "perimetre": apercu["perimetre"]}

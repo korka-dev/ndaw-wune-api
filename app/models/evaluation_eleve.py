@@ -34,13 +34,13 @@ class EvaluationEleve(Base, UUIDMixin, TimestampMixin):
 
     superviseur_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     eleve_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("eleves.id", ondelete="CASCADE"),
+        ForeignKey("eleves.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

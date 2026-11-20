@@ -1,3 +1,4 @@
+from datetime import datetime
 import uuid
 from typing import Optional, List
 from pydantic import BaseModel, field_validator
@@ -37,6 +38,7 @@ class SchoolResponse(BaseModel):
     director_phone: Optional[str] = None
     langue:         Optional[str] = None
 
+    archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}
 
 

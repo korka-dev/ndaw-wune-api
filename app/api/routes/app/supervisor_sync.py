@@ -21,7 +21,7 @@ from app.core.deps import DB, SuperviseurUser
 from app.models.evaluation_competence import EvaluationCompetence
 from app.models.rapport_libelle import RapportLibelle
 from app.models.rapport_question import RapportQuestion
-from app.models.rapport_journalier import RapportJournalier
+from app.models.rapport_journalier import RAPPORT_COMPTE, RapportJournalier
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
 from app.schemas.sync import SyncRapportQuestion
@@ -143,7 +143,7 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
                     RapportJournalier.teacher_id,
                     func.max(RapportJournalier.date_rapport).label("last_date"),
                 )
-                .where(RapportJournalier.teacher_id.in_(teacher_uuids))
+                .where(RapportJournalier.teacher_id.in_(teacher_uuids), RAPPORT_COMPTE)
                 .group_by(RapportJournalier.teacher_id)
             )
         ).all()

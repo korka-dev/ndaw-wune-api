@@ -24,10 +24,11 @@ from sqlalchemy.orm import selectinload
 from app.core.deps import AdminUser, DB
 from app.core.export_utils import build_csv_response
 from app.core.pagination import Page, Pagination
-from app.models.rapport_journalier import RapportJournalier
+from app.models.rapport_journalier import RAPPORT_COMPTE, STATUTS_RAPPORT, RapportJournalier
 from app.models.user import User, UserRole
 from app.services.rapport_photos import LIST_COLUMNS, NB_PHOTOS, photo_response
-from app.schemas.rapport_journalier import RapportJournalierAdminListItem
+from app.schemas.rapport_journalier import RapportAnnulation, RapportJournalierAdminListItem, RapportVersionItem
+from app.services import rapport_journalier_service as rj_service
 
 router = APIRouter(prefix="/rapports/journalier", tags=["Admin — Rapports Journaliers"])
 
@@ -43,9 +44,20 @@ def _apply_filters(
     date_from:  Optional[date]      = None,
     date_to:    Optional[date]      = None,
     ief:        Optional[str]       = None,
+    statut:     Optional[str]       = None,
 ) -> Select:
     """Filtres communs à la liste, l'export, les statistiques et la galerie —
-    pour que les quatre vues décrivent toujours le même sous-ensemble."""
+    pour que les quatre vues décrivent toujours le même sous-ensemble.
+
+    Statut (APP-31) : par défaut, les rapports annulés sont exclus de toutes
+    les vues ; `statut=annule` les montre seuls, `statut=tous` sans filtre.
+    """
+    if statut is None:
+        q = q.where(RAPPORT_COMPTE)
+    elif statut != "tous":
+        if statut not in STATUTS_RAPPORT:
+            raise HTTPException(422, f"statut inconnu : {statut} (soumis, corrige, annule ou tous).")
+        q = q.where(RapportJournalier.statut == statut)
     if role:
         q = q.join(User, User.id == RapportJournalier.teacher_id).where(User.role == role)
     if teacher_id:
@@ -80,10 +92,11 @@ async def list_rapports_journalier(
     date_from:   Optional[date]      = None,
     date_to:     Optional[date]      = None,
     ief:         Optional[str]       = None,
+    statut:      Optional[str]       = None,   # soumis | corrige | annule | tous (défaut : hors annulés)
 ) -> Page[RapportJournalierAdminListItem]:
     base = _apply_filters(
         select(*LIST_COLUMNS), teacher_id=teacher_id, role=role, search=search,
-        date_from=date_from, date_to=date_to, ief=ief,
+        date_from=date_from, date_to=date_to, ief=ief, statut=statut,
     ).order_by(RapportJournalier.date_rapport.desc(), RapportJournalier.created_at.desc())
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
@@ -131,11 +144,12 @@ async def stats_rapports_journalier(
     date_from:   Optional[date]      = None,
     date_to:     Optional[date]      = None,
     ief:         Optional[str]       = None,
+    statut:      Optional[str]       = None,   # soumis | corrige | annule | tous (défaut : hors annulés)
 ) -> RapportStats:
     """Agrégats sur le même sous-ensemble que la liste — les filtres de l'écran
     s'appliquent aux graphiques."""
     f = dict(teacher_id=teacher_id, role=role, search=search,
-             date_from=date_from, date_to=date_to, ief=ief)
+             date_from=date_from, date_to=date_to, ief=ief, statut=statut)
 
     resume = (await db.execute(_apply_filters(select(
         func.count().label("total"),
@@ -238,6 +252,7 @@ async def list_photos(
     date_from:   Optional[date]      = None,
     date_to:     Optional[date]      = None,
     ief:         Optional[str]       = None,
+    statut:      Optional[str]       = None,   # soumis | corrige | annule | tous (défaut : hors annulés)
 ) -> Page[PhotoItem]:
     """Index des rapports comportant au moins une photo — métadonnées seules.
     Les images se chargent ensuite une par une (voir la route ci-dessous)."""
@@ -249,7 +264,7 @@ async def list_photos(
             NB_PHOTOS.label("nb_photos"),
         ),
         teacher_id=teacher_id, role=role, search=search,
-        date_from=date_from, date_to=date_to, ief=ief,
+        date_from=date_from, date_to=date_to, ief=ief, statut=statut,
     ).where(NB_PHOTOS > 0).order_by(RapportJournalier.date_rapport.desc())
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
@@ -280,29 +295,15 @@ async def export_csv(
     date_from:  Optional[date]      = None,
     date_to:    Optional[date]      = None,
     ief:        Optional[str]       = None,
+    statut:      Optional[str]       = None,   # soumis | corrige | annule | tous (défaut : hors annulés)
     fields:     Optional[str]       = None,
 ) -> StreamingResponse:
     """Exporte les rapports journaliers filtrés en CSV."""
-    q = select(RapportJournalier).options(selectinload(RapportJournalier.teacher))
-    if role:
-        q = q.join(User, User.id == RapportJournalier.teacher_id).where(User.role == role)
-    if teacher_id:
-        q = q.where(RapportJournalier.teacher_id == teacher_id)
-    if search:
-        like = f"%{search}%"
-        q = q.where(
-            or_(
-                RapportJournalier.nom_tuteur.ilike(like),
-                RapportJournalier.ecole.ilike(like),
-                RapportJournalier.ief.ilike(like),
-            )
-        )
-    if date_from:
-        q = q.where(RapportJournalier.date_rapport >= date_from)
-    if date_to:
-        q = q.where(RapportJournalier.date_rapport <= date_to)
-    if ief:
-        q = q.where(RapportJournalier.ief.ilike(f"%{ief}%"))
+    q = _apply_filters(
+        select(RapportJournalier).options(selectinload(RapportJournalier.teacher)),
+        teacher_id=teacher_id, role=role, search=search,
+        date_from=date_from, date_to=date_to, ief=ief, statut=statut,
+    )
 
     rapports = (await db.execute(q.order_by(RapportJournalier.date_rapport))).scalars().all()
 
@@ -326,6 +327,9 @@ async def export_csv(
         ("has_observations",        "has_observations"),
         ("commentaires",            "commentaires"),
         ("soumis_en_offline",       "soumis_en_offline"),
+        ("statut",                  "statut"),
+        ("version",                 "version"),
+        ("statut_motif",            "statut_motif"),
     ]
     rows = [
         [
@@ -334,6 +338,7 @@ async def export_csv(
             r.difficultes, r.autres_difficultes, r.description_difficultes,
             r.directeur_venu, r.besoin_appui, r.domaines_appui,
             r.has_observations, r.commentaires, r.soumis_en_offline,
+            r.statut, r.version, r.statut_motif,
         ]
         for r in rapports
     ]
@@ -344,3 +349,23 @@ async def export_csv(
         fields=fields,
         filename="rapports_journalier.csv",
     )
+
+
+# ── Cycle de vie (APP-31) ─────────────────────────────────────────────────────
+
+@router.post("/{rapport_id}/annuler", response_model=RapportJournalierAdminListItem)
+async def annuler_rapport(
+    rapport_id: uuid.UUID, body: RapportAnnulation, db: DB, current_user: AdminUser,
+) -> RapportJournalierAdminListItem:
+    """Annule un rapport avec motif. Il reste consultable (`statut=annule`) et
+    son contenu est figé dans l'historique ; il sort des indicateurs."""
+    r = await rj_service.charger(db, rapport_id)
+    await rj_service.annuler(db, r, body, current_user)
+    row = (await db.execute(select(*LIST_COLUMNS).where(RapportJournalier.id == r.id))).mappings().one()
+    return RapportJournalierAdminListItem(**row)
+
+
+@router.get("/{rapport_id}/historique", response_model=list[RapportVersionItem])
+async def historique_rapport(rapport_id: uuid.UUID, db: DB, _: AdminUser) -> list[RapportVersionItem]:
+    """Versions antérieures d'un rapport (corrections et annulation), de la plus ancienne à la plus récente."""
+    return [RapportVersionItem.model_validate(v) for v in await rj_service.historique(db, rapport_id)]

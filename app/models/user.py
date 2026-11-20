@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,10 +33,16 @@ class UserGroupe(str, enum.Enum):
 
 class User(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "users"
+    __table_args__ = (
+        # APP-35 : unicité insensible à la casse (e-mails stockés normalisés).
+        Index("uq_users_email_lower", text("lower(email)"), unique=True),
+    )
 
     # ── Identité ──────────────────────────────────────────────────────────────
     name:  Mapped[str]           = mapped_column(String(255), nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # APP-15 : archivage (non NULL = archivé). Rien n'est supprimé avec l'historique.
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     # ── Authentification ──────────────────────────────────────────────────────
     email:         Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
@@ -98,11 +104,12 @@ class User(Base, UUIDMixin, TimestampMixin):
     )
 
     seances: Mapped[List["Seance"]] = relationship(
-        "Seance", back_populates="teacher", cascade="all, delete-orphan"
+        # Historique : jamais supprimé avec le compte (APP-15, FK RESTRICT).
+        "Seance", back_populates="teacher", passive_deletes="all"
     )
 
     rapports_prof: Mapped[List["RapportProf"]] = relationship(
-        "RapportProf", back_populates="teacher", cascade="all, delete-orphan"
+        "RapportProf", back_populates="teacher", passive_deletes="all"
     )
 
     def __repr__(self) -> str:

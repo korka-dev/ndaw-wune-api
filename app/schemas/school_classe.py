@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import datetime
 
 import uuid
 from typing import List, Optional
@@ -65,6 +66,7 @@ class SchoolClasseResponse(BaseModel):
     school_id: uuid.UUID
     school:    Optional[SchoolBrief] = None
 
+    archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}
 
 

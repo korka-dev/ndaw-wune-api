@@ -8,11 +8,12 @@ Routes :
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select
 
 from app.core.deps import DB, SuperviseurUser
@@ -61,14 +62,17 @@ class ElevesPayload(BaseModel):
 
 class EvaluationIn(BaseModel):
     eleve_id:    str
-    competence:  str
+    competence:  str            = Field(max_length=100)
     resultat:    str       # "acquis" | "en_cours" | "a_aider"
     date_eval:   str       # ISO YYYY-MM-DD
-    commentaire: Optional[str] = None
+    commentaire: Optional[str] = Field(default=None, max_length=2_000)
+
+
+MAX_LOT_EVALUATIONS = 500
 
 
 class EvaluationBatch(BaseModel):
-    evaluations: list[EvaluationIn]
+    evaluations: list[EvaluationIn] = Field(max_length=MAX_LOT_EVALUATIONS)
 
 
 class EvaluationOut(BaseModel):
@@ -164,6 +168,9 @@ async def get_classe_eleves(
 
     school_ids = await get_matching_school_ids(db, teacher.school)
     classe_norm = " ".join(classe.strip().split()).lower()
+    # APP-06 : la classe demandée doit être une classe de CET enseignant.
+    if classe_norm not in {" ".join(c.strip().split()).lower() for c in (teacher.classes or [])}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Classe non affectée à cet enseignant.")
     eleve_result = await db.execute(
         select(Eleve)
         .where(
@@ -209,6 +216,12 @@ async def list_evaluations(
 
     rows = (await db.execute(q)).scalars().all()
 
+    # APP-06 : seules les évaluations d'élèves encore dans le périmètre actuel
+    # du superviseur sont restituées (même règle que pour les écritures).
+    if rows:
+        perimetre = await filter_supervised_eleve_ids(db, current_user, list({r.eleve_id for r in rows}))
+        rows = [r for r in rows if r.eleve_id in perimetre]
+
     # Filtre par classe : jointure post-requête sur eleve.classe
     if classe:
         eleve_ids = {e.eleve_id for e in rows}
@@ -252,6 +265,21 @@ _EQUIVALENCES_RESULTAT = {
 RESULTATS_VALIDES = set(_EQUIVALENCES_RESULTAT)
 
 
+DATE_EVAL_MIN = date(2024, 1, 1)
+
+
+def _lot_invalide(erreurs: list[dict], code: str = "LOT_INVALIDE", http: int = 422):
+    return HTTPException(
+        status_code=http,
+        detail={
+            "code": code,
+            "message": f"{len(erreurs)} évaluation(s) refusée(s) : aucune évaluation du lot n'a été enregistrée. "
+                       "Corrigez les lignes signalées puis renvoyez le lot.",
+            "erreurs": erreurs,
+        },
+    )
+
+
 @router.post("/evaluations", status_code=status.HTTP_201_CREATED)
 async def submit_evaluations(
     body: EvaluationBatch,
@@ -259,9 +287,14 @@ async def submit_evaluations(
     db: DB,
 ) -> dict:
     """
-    Soumet un lot d'évaluations.
-    Upsert : si une évaluation (superviseur, élève, compétence, date) existe déjà,
-    elle est mise à jour (résultat + commentaire).
+    Soumet un lot d'évaluations (rapport V2, APP-29).
+
+    Politique : lot ATOMIQUE. Tout est prévalidé (format, date, élève existant,
+    périmètre, doublons dans le lot) avant la moindre écriture ; une seule
+    entrée invalide → 422 (ou 403 hors périmètre) avec la liste exacte des
+    entrées refusées (`index` dans le lot), rien n'est enregistré.
+    Succès : un résultat par entrée (`cree`, `mis_a_jour`, `inchange`), si
+    bien qu'un rejeu du même lot est sans effet et sans doublon.
     """
     if not body.evaluations:
         raise HTTPException(status_code=422, detail="La liste d'évaluations est vide.")
@@ -276,66 +309,116 @@ async def submit_evaluations(
     active_session = session_result.scalars().first()
     session_id = active_session.id if active_session else None
 
-    # ── Validation complète AVANT toute écriture (aucune mutation partielle) ──
-    parsed: list[tuple[uuid.UUID, date, str, EvaluationIn]] = []
-    for ev in body.evaluations:
+    # ── Prévalidation complète AVANT toute écriture ──────────────────────────
+    erreurs: list[dict] = []
+    parsed: list[tuple[int, uuid.UUID, date, str, EvaluationIn]] = []
+    vus: dict[tuple, int] = {}
+    demain = date.today() + timedelta(days=1)
+    for i, ev in enumerate(body.evaluations):
+        def refus(msg: str) -> None:
+            erreurs.append({"index": i, "eleve_id": ev.eleve_id, "competence": ev.competence, "erreur": msg})
+
         if ev.resultat not in RESULTATS_VALIDES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Résultat invalide : '{ev.resultat}'. Valeurs : {sorted(RESULTATS_VALIDES)}",
-            )
+            refus(f"résultat invalide « {ev.resultat} » (valeurs : {', '.join(sorted(RESULTATS_VALIDES))}).")
+            continue
+        if not ev.competence.strip():
+            refus("compétence vide.")
+            continue
         try:
             eleve_uuid = uuid.UUID(ev.eleve_id)
         except ValueError:
-            raise HTTPException(status_code=422, detail=f"eleve_id invalide : {ev.eleve_id}")
+            refus("identifiant d'élève invalide.")
+            continue
         try:
             eval_date = date.fromisoformat(ev.date_eval)
         except ValueError:
-            raise HTTPException(status_code=422, detail=f"date_eval invalide : {ev.date_eval}")
-        parsed.append((eleve_uuid, eval_date, _EQUIVALENCES_RESULTAT[ev.resultat], ev))
+            refus(f"date invalide « {ev.date_eval} » (AAAA-MM-JJ).")
+            continue
+        if eval_date > demain or eval_date < DATE_EVAL_MIN:
+            refus(f"date hors période ({ev.date_eval}).")
+            continue
+        cle = (eleve_uuid, ev.competence.strip(), eval_date)
+        if cle in vus:
+            refus(f"doublon dans le lot (même élève, compétence et date que l'entrée {vus[cle]}).")
+            continue
+        vus[cle] = i
+        parsed.append((i, eleve_uuid, eval_date, _EQUIVALENCES_RESULTAT[ev.resultat], ev))
+    if erreurs:
+        raise _lot_invalide(erreurs)
 
-    # Chaque élève doit appartenir à une classe supervisée par ce superviseur.
-    allowed = await filter_supervised_eleve_ids(db, current_user, list({p[0] for p in parsed}))
-    if any(p[0] not in allowed for p in parsed):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Un ou plusieurs élèves ne relèvent pas de votre périmètre de supervision.",
-        )
+    # Élèves existants, puis périmètre de supervision.
+    ids = list({p[1] for p in parsed})
+    existants = set((await db.execute(select(Eleve.id).where(Eleve.id.in_(ids)))).scalars().all())
+    erreurs = [
+        {"index": i, "eleve_id": ev.eleve_id, "competence": ev.competence, "erreur": "élève introuvable."}
+        for i, eid, _, _, ev in parsed if eid not in existants
+    ]
+    if erreurs:
+        raise _lot_invalide(erreurs)
+    allowed = await filter_supervised_eleve_ids(db, current_user, ids)
+    erreurs = [
+        {"index": i, "eleve_id": ev.eleve_id, "competence": ev.competence,
+         "erreur": "élève hors de votre périmètre de supervision."}
+        for i, eid, _, _, ev in parsed if eid not in allowed
+    ]
+    if erreurs:
+        raise _lot_invalide(erreurs, code="HORS_PERIMETRE", http=status.HTTP_403_FORBIDDEN)
 
     now = datetime.now(timezone.utc)
-    created = updated = 0
+    resultats: list[dict] = []
 
-    for eleve_uuid, eval_date, resultat_norm, ev in parsed:
-        # Chercher doublon existant
-        existing = (await db.execute(
+    async def _existante(eleve_uuid, competence, eval_date):
+        return (await db.execute(
             select(EvaluationEleve).where(
                 EvaluationEleve.superviseur_id == current_user.id,
                 EvaluationEleve.eleve_id       == eleve_uuid,
-                EvaluationEleve.competence     == ev.competence,
+                EvaluationEleve.competence     == competence,
                 EvaluationEleve.date_eval      == eval_date,
             )
         )).scalar_one_or_none()
 
+    def _maj(existing: EvaluationEleve, resultat_norm: str, ev: EvaluationIn) -> str:
+        if existing.resultat == resultat_norm and (existing.commentaire or None) == (ev.commentaire or None):
+            return "inchange"
+        existing.resultat    = resultat_norm
+        existing.commentaire = ev.commentaire
+        existing.updated_at  = now
+        return "mis_a_jour"
+
+    for i, eleve_uuid, eval_date, resultat_norm, ev in parsed:
+        competence = ev.competence.strip()
+        existing = await _existante(eleve_uuid, competence, eval_date)
         if existing:
-            existing.resultat    = resultat_norm
-            existing.commentaire = ev.commentaire
-            existing.updated_at  = now
-            updated += 1
+            statut = _maj(existing, resultat_norm, ev)
         else:
             record = EvaluationEleve(
                 id=uuid.uuid4(),
                 superviseur_id=current_user.id,
                 eleve_id=eleve_uuid,
                 session_id=session_id,
-                competence=ev.competence,
+                competence=competence,
                 resultat=resultat_norm,
                 date_eval=eval_date,
                 commentaire=ev.commentaire,
                 created_at=now,
                 updated_at=now,
             )
-            db.add(record)
-            created += 1
+            try:
+                # Envoi concurrent du même lot : l'unicité tranche, on bascule
+                # en mise à jour au lieu d'une erreur 500.
+                async with db.begin_nested():
+                    db.add(record)
+                    await db.flush()
+                statut, existing = "cree", record
+            except IntegrityError:
+                existing = await _existante(eleve_uuid, competence, eval_date)
+                if existing is None:
+                    raise
+                statut = _maj(existing, resultat_norm, ev)
+        resultats.append({"index": i, "id": str(existing.id), "eleve_id": ev.eleve_id,
+                          "competence": competence, "date_eval": ev.date_eval, "statut": statut})
 
     await db.flush()
-    return {"created": created, "updated": updated, "total": created + updated}
+    created = sum(r["statut"] == "cree" for r in resultats)
+    updated = sum(r["statut"] == "mis_a_jour" for r in resultats)
+    return {"created": created, "updated": updated, "total": len(resultats), "resultats": resultats}

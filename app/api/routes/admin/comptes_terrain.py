@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,7 @@ from app.models.school import School
 from app.models.user import User, UserRole
 from app.schemas.user import SetPasswordRequest, UserResponse
 from app.services import user_service
+from app.services.archivage import non_archive
 
 router = APIRouter(prefix="/comptes-terrain", tags=["Admin — Comptes tuteurs & superviseurs"])
 
@@ -36,6 +37,7 @@ async def list_comptes_terrain(
     page: Pagination,
     role:   Optional[UserRole] = None,   # enseignant | superviseur — omis = les deux
     search: Optional[str]      = None,   # nom, téléphone ou école
+    archives: bool = Query(False, description="Inclure les comptes archivés"),
 ) -> Page[UserResponse]:
     if role is not None and role not in _ROLES_TERRAIN:
         raise HTTPException(
@@ -44,7 +46,7 @@ async def list_comptes_terrain(
         )
     roles = [role] if role else list(_ROLES_TERRAIN)
 
-    base = select(User).where(User.role.in_(roles))
+    base = select(User).where(User.role.in_(roles), non_archive(User, archives))
     if search:
         like = f"%{search.strip()}%"
         base = base.where(or_(

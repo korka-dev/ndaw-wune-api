@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 
-from sqlalchemy import Date, Enum, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,6 +25,8 @@ class ProgramSession(Base, UUIDMixin, TimestampMixin):
     name:        Mapped[str]           = mapped_column(String(255), nullable=False)
     date_debut:  Mapped[date]          = mapped_column(Date, nullable=False)
     date_fin:    Mapped[date]          = mapped_column(Date, nullable=False)
+    # APP-15 : archivage (non NULL = archivé). Rien n'est supprimé avec l'historique.
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     status:      Mapped[SessionStatus] = mapped_column(
         Enum(SessionStatus, name="session_status"),
         default=SessionStatus.inactive,
@@ -46,7 +48,7 @@ class ProgramSession(Base, UUIDMixin, TimestampMixin):
     seances: Mapped[List["Seance"]] = relationship(
         "Seance",
         back_populates="session",
-        cascade="all, delete-orphan",
+        passive_deletes="all",  # historique conservé (APP-15)
     )
 
     def __repr__(self) -> str:

@@ -22,14 +22,14 @@ class EvaluationTirage(Base, UUIDMixin, TimestampMixin):
 
     sujet_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("evaluation_sujets.id", ondelete="CASCADE"),
+        ForeignKey("evaluation_sujets.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
 
     eleve_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("eleves.id", ondelete="CASCADE"),
+        ForeignKey("eleves.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

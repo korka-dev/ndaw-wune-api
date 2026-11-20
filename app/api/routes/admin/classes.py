@@ -5,18 +5,19 @@ import io
 import uuid
 from typing import Optional
 
-import openpyxl
-from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select, func
 
 from app.core.deps import AdminUser, DB
-from app.core.upload_utils import read_upload_capped
+from app.core.upload_utils import read_upload_capped, iter_rows_capped, load_workbook_safe
 from app.core.export_utils import build_xlsx_response
 from app.core.pagination import Page, Pagination
 from app.models.eleve import Eleve
 from app.models.school_classe import SchoolClasse
 from app.models.school import School
 from app.schemas.school_classe import SchoolClasseCreate, SchoolClasseResponse, SchoolClasseUpdate
+from app.services import archivage
+from app.services.archivage import non_archive
 
 router = APIRouter(prefix="/classes", tags=["Admin — Classes"])
 
@@ -76,8 +77,9 @@ async def list_classes(
     page: Pagination,
     school_id: Optional[uuid.UUID] = Query(None),
     niveau:    Optional[str]        = Query(None),
+    archives: bool = Query(False, description="Inclure les éléments archivés"),
 ) -> Page[SchoolClasseResponse]:
-    q = select(SchoolClasse).order_by(SchoolClasse.niveau, SchoolClasse.name)
+    q = select(SchoolClasse).where(non_archive(SchoolClasse, archives)).order_by(SchoolClasse.niveau, SchoolClasse.name)
     if school_id:
         q = q.where(SchoolClasse.school_id == school_id)
     if niveau:
@@ -128,12 +130,9 @@ async def reimport_classes_xlsx(db: DB, _: AdminUser, file: UploadFile = File(..
     - Nouvelle classe → créée ; école créée si elle n'existe pas encore
     """
     content = await read_upload_capped(file)
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    wb = load_workbook_safe(content)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     wb.close()
 
     if len(all_rows) < 2:
@@ -286,11 +285,16 @@ async def update_classe(
     return _with_live_effectif(obj, live)
 
 
-@router.delete("/{classe_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_classe(classe_id: uuid.UUID, db: DB, _: AdminUser) -> Response:
+@router.delete("/{classe_id}")
+async def delete_classe(classe_id: uuid.UUID, db: DB, current_user: AdminUser, definitif: bool = Query(False, description="Suppression physique, seulement sans historique (APP-15)")) -> dict:
     obj = await _get_or_404(db, classe_id)
-    await db.delete(obj)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return await archivage.supprimer_ou_archiver(db, obj, current_user, definitif)
+
+
+@router.post("/{classe_id}/restaurer")
+async def restore_classe(classe_id: uuid.UUID, db: DB, current_user: AdminUser) -> dict:
+    obj = await _get_or_404(db, classe_id)
+    return await archivage.restaurer(db, obj, current_user)
 
 # ── Export Excel ──────────────────────────────────────────────────────────────
 

@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 from app.core.deps import AdminUser, DB
 from app.core.export_utils import sanitize_cell
-from app.models.rapport_journalier import RapportJournalier
+from app.models.rapport_journalier import RAPPORT_COMPTE, RapportJournalier
 from app.models.seance import RapportProf, Seance, SeanceStatus
 from app.models.user import User, UserRole
 
@@ -116,6 +116,7 @@ async def _count_missed_reports_bulk(
         select(RapportJournalier.teacher_id, RapportJournalier.date_rapport).where(
             RapportJournalier.teacher_id.in_(teacher_ids),
             RapportJournalier.date_rapport.in_(working_days),
+            RAPPORT_COMPTE,
         )
     )).all()
 

@@ -22,7 +22,7 @@ class RapportDifficulteResolution(Base, UUIDMixin, TimestampMixin):
 
     rapport_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("rapports_journalier.id", ondelete="CASCADE"),
+        ForeignKey("rapports_journalier.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

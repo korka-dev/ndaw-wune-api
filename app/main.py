@@ -15,6 +15,8 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from app.core.upload_utils import ContentLengthLimitMiddleware
+
 from app.core.app_version import is_outdated
 from app.core.config import settings
 from app.core.database import engine, AsyncSessionLocal
@@ -88,6 +90,9 @@ app.add_middleware(SlowAPIMiddleware)
 
 
 # ── Middlewares ────────────────────────────────────────────────────────────────
+
+# APP-39 : corps démesuré refusé avant lecture (CORS reste la couche externe).
+app.add_middleware(ContentLengthLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

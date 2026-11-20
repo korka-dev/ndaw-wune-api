@@ -13,7 +13,7 @@ from app.models.progression_config import (
     DEFAULT_NB_SEMAINES,
     ProgressionConfig,
 )
-from app.models.rapport_journalier import RapportJournalier
+from app.models.rapport_journalier import RAPPORT_COMPTE, RapportJournalier
 
 
 async def get_config_for(
@@ -57,7 +57,7 @@ async def get_current_progression(db: AsyncSession, teacher_id: uuid.UUID) -> Op
     rapport = (
         await db.execute(
             select(RapportJournalier)
-            .where(RapportJournalier.teacher_id == teacher_id)
+            .where(RapportJournalier.teacher_id == teacher_id, RAPPORT_COMPTE)
             .order_by(RapportJournalier.date_rapport.desc(), RapportJournalier.created_at.desc())
             .limit(1)
         )
@@ -81,7 +81,7 @@ async def get_latest_progression_by_teacher(
     rows = (
         await db.execute(
             select(RapportJournalier)
-            .where(RapportJournalier.teacher_id.in_(teacher_ids))
+            .where(RapportJournalier.teacher_id.in_(teacher_ids), RAPPORT_COMPTE)
             .order_by(
                 RapportJournalier.teacher_id,
                 RapportJournalier.date_rapport.desc(),
@@ -100,3 +100,41 @@ async def get_latest_progression_by_teacher(
             "date_rapport": r.date_rapport.isoformat(),
         }
     return result
+
+
+async def active_session_for(db: AsyncSession, user) -> Optional["ProgramSession"]:
+    """Session active de l'utilisateur (affectation), sinon la plus récente active
+    — même résolution que /app/sync."""
+    from app.models.session import ProgramSession, SessionStatus, TeacherSession
+
+    active = (await db.execute(
+        select(ProgramSession)
+        .join(TeacherSession, TeacherSession.session_id == ProgramSession.id)
+        .where(TeacherSession.teacher_id == user.id, ProgramSession.status == SessionStatus.active)
+        .order_by(ProgramSession.date_debut.desc())
+    )).scalars().first()
+    if active is None:
+        active = (await db.execute(
+            select(ProgramSession)
+            .where(ProgramSession.status == SessionStatus.active)
+            .order_by(ProgramSession.date_debut.desc())
+        )).scalars().first()
+    return active
+
+
+async def check_bornes_campagne(db: AsyncSession, user, semaine: int, jour: int) -> None:
+    """422 par champ si semaine / jour dépassent la configuration de la campagne
+    (rapport V2, APP-28 : règles paramétrées, pas de quotas copiés en dur)."""
+    from fastapi import HTTPException
+
+    active = await active_session_for(db, user)
+    nb_semaines, nb_jours = await get_config_for(db, user.school_id, active.id if active else None)
+    erreurs = []
+    if semaine > nb_semaines:
+        erreurs.append({"loc": ["body", "semaine"], "type": "value_error",
+                        "msg": f"semaine {semaine} hors campagne (1 à {nb_semaines})."})
+    if jour > nb_jours:
+        erreurs.append({"loc": ["body", "jour_cours"], "type": "value_error",
+                        "msg": f"jour de cours {jour} hors campagne (1 à {nb_jours})."})
+    if erreurs:
+        raise HTTPException(status_code=422, detail=erreurs)

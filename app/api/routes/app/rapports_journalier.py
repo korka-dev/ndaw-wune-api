@@ -22,7 +22,11 @@ from sqlalchemy.exc import IntegrityError
 from app.core.deps import DB, MobileUser
 from app.core.pagination import Page, Pagination
 from app.models.rapport_journalier import RapportJournalier
-from app.schemas.rapport_journalier import RapportJournalierCreate, RapportJournalierListItem
+from app.schemas.rapport_journalier import (
+    RapportAnnulation, RapportCorrection, RapportJournalierCreate, RapportJournalierListItem,
+)
+from app.services import rapport_journalier_service as rj_service
+from app.services.progression_service import active_session_for, check_bornes_campagne
 from app.services.rapport_photos import LIST_COLUMNS, photo_response, photos_de
 
 router = APIRouter(prefix="/rapports/journalier", tags=["App — Rapports Journaliers"])
@@ -101,8 +105,15 @@ async def submit_rapport_journalier(
         if doublon is not None:
             return _light(doublon)
 
+    # Bornes de campagne vérifiées seulement pour une NOUVELLE écriture : un
+    # rejeu d'un rapport déjà accepté reste un succès même si la config a changé.
+    await check_bornes_campagne(db, current_user, data["semaine"], data["jour_cours"])
+    # Campagne de rattachement (APP-22) : la session active à la réception.
+    active = await active_session_for(db, current_user)
+
     rapport = RapportJournalier(
-        teacher_id=current_user.id, client_op_id=op_id, client_op_hash=digest if op_id else None, **data,
+        teacher_id=current_user.id, client_op_id=op_id, client_op_hash=digest if op_id else None,
+        session_id=active.id if active else None, **data,
     )
     try:
         # Point de sauvegarde : deux envois simultanés de la même clé → le
@@ -150,21 +161,41 @@ async def get_photo(rapport_id: uuid.UUID, index: int, current_user: MobileUser,
     return photo_response(row["photos_classe_url"], row["photo_classe_url"], index)
 
 
-@router.delete("/{rapport_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_rapport_journalier(
+@router.post("/{rapport_id}/annuler", response_model=RapportJournalierListItem)
+async def annuler_rapport_journalier(
     rapport_id: uuid.UUID,
+    body: RapportAnnulation,
     current_user: MobileUser,
     db: DB,
-) -> Response:
-    """Supprime un rapport journalier appartenant à l'utilisateur connecté."""
-    result = await db.execute(
-        select(RapportJournalier).where(
-            RapportJournalier.id == rapport_id,
-            RapportJournalier.teacher_id == current_user.id,
-        )
+) -> RapportJournalierListItem:
+    """Annule un rapport de l'utilisateur, avec motif (APP-31). Le rapport et
+    son contenu restent en base ; il ne compte plus dans les indicateurs."""
+    r = await rj_service.charger(db, rapport_id, current_user.id)
+    await rj_service.annuler(db, r, body, current_user)
+    return _light(r)
+
+
+@router.put("/{rapport_id}", response_model=RapportJournalierListItem)
+async def corriger_rapport_journalier(
+    rapport_id: uuid.UUID,
+    body: RapportCorrection,
+    current_user: MobileUser,
+    db: DB,
+) -> RapportJournalierListItem:
+    """Corrige un rapport de l'utilisateur, avec motif : nouvelle version,
+    l'état précédent est conservé (APP-31)."""
+    r = await rj_service.charger(db, rapport_id, current_user.id)
+    if body.semaine is not None or body.jour_cours is not None:
+        await check_bornes_campagne(db, current_user, body.semaine or r.semaine, body.jour_cours or r.jour_cours)
+    await rj_service.corriger(db, r, body, current_user)
+    return _light(r)
+
+
+@router.delete("/{rapport_id}", status_code=status.HTTP_410_GONE)
+async def delete_rapport_journalier(rapport_id: uuid.UUID, current_user: MobileUser) -> None:
+    """Supprimer un rapport soumis n'est plus possible (APP-31) : utilisez
+    POST /{id}/annuler avec un motif."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Un rapport soumis ne se supprime plus : annulez-le avec un motif (POST /{id}/annuler).",
     )
-    rapport = result.scalar_one_or_none()
-    if rapport is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rapport introuvable.")
-    await db.delete(rapport)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)

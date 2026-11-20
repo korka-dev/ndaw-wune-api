@@ -9,19 +9,21 @@ from typing import Optional
 
 import pdfplumber
 import openpyxl
-from fastapi import APIRouter, Body, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
-from app.core.upload_utils import read_upload_capped
+from app.core.upload_utils import read_upload_capped, iter_rows_capped, load_workbook_safe
 from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.eleve import Eleve
 from app.models.school import School
 from app.schemas.eleve import EleveCreate, EleveUpdate, EleveResponse
+from app.services import archivage
+from app.services.archivage import non_archive
 
 router = APIRouter(prefix="/eleves", tags=["Admin — Élèves"])
 
@@ -113,10 +115,10 @@ def _parse_csv(content_bytes: bytes) -> tuple[list[dict], list[str]]:
 
 def _parse_xlsx(content_bytes: bytes) -> tuple[list[dict], list[str]]:
     """Extrait les lignes d'un fichier Excel .xlsx."""
-    wb = openpyxl.load_workbook(io.BytesIO(content_bytes), read_only=True, data_only=True)
+    wb = load_workbook_safe(content_bytes)
     ws = wb.active
 
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     if not all_rows:
         raise HTTPException(status_code=422, detail="Le fichier Excel est vide.")
 
@@ -230,6 +232,7 @@ async def list_eleves(
     classe:     Optional[str] = None,
     search:     Optional[str] = None,   # filtre nom/prénom
     ief:        Optional[str] = None,   # filtre par région (school.region)
+    archives: bool = Query(False, description="Inclure les éléments archivés"),
 ) -> Page[EleveResponse]:
     from sqlalchemy.orm import joinedload
     from app.models.school import School as SchoolModel
@@ -242,6 +245,7 @@ async def list_eleves(
     else:
         base = select(Eleve).order_by(Eleve.nom)
 
+    base = base.where(non_archive(Eleve, archives))
     if school_id:
         base = base.where(Eleve.school_id == school_id)
     if session_id:
@@ -270,6 +274,7 @@ async def list_eleves(
             school_id=e.school_id,
             session_id=e.session_id,
             school_name=e.school.name if e.school else None,
+            archived_at=e.archived_at,
             school_region=e.school.region if e.school else None,
         )
         for e in items_orm
@@ -299,24 +304,27 @@ async def update_eleve(eleve_id: uuid_module.UUID, body: EleveUpdate, db: DB, _:
     return eleve
 
 
-@router.delete("/{eleve_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_eleve(eleve_id: uuid_module.UUID, db: DB, _: AdminUser) -> Response:
-    result = await db.execute(select(Eleve).where(Eleve.id == eleve_id))
-    eleve = result.scalar_one_or_none()
-    if not eleve:
-        raise HTTPException(status_code=404, detail="Élève introuvable.")
-    await db.delete(eleve)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{eleve_id}")
+async def delete_eleve(eleve_id: uuid_module.UUID, db: DB, current_user: AdminUser, definitif: bool = Query(False, description="Suppression physique, seulement sans historique (APP-15)")) -> dict:
+    """Archive l'élève (APP-15) : évaluations, tirages et remplacements conservés."""
+    eleve = await archivage.charger(db, Eleve, eleve_id, "Élève introuvable.")
+    return await archivage.supprimer_ou_archiver(db, eleve, current_user, definitif)
+
+
+@router.post("/{eleve_id}/restaurer")
+async def restore_eleve(eleve_id: uuid_module.UUID, db: DB, current_user: AdminUser) -> dict:
+    eleve = await archivage.charger(db, Eleve, eleve_id, "Élève introuvable.")
+    return await archivage.restaurer(db, eleve, current_user)
 
 
 @router.delete("", status_code=status.HTTP_200_OK)
 async def bulk_delete_eleves(
     db: DB,
-    _: AdminUser,
+    current_user: AdminUser,
     ids: list[uuid_module.UUID] = Body(..., embed=True),
 ) -> dict:
     """
-    Supprime plusieurs élèves en une seule requête.
+    Archive plusieurs élèves en une seule requête (APP-15).
     Corps attendu : { "ids": ["uuid1", "uuid2", ...] }
     """
     if not ids:
@@ -324,10 +332,10 @@ async def bulk_delete_eleves(
     if len(ids) > 500:
         raise HTTPException(status_code=422, detail="Maximum 500 élèves supprimables en une seule opération.")
 
-    result = await db.execute(
-        delete(Eleve).where(Eleve.id.in_(ids))
-    )
-    return {"deleted": result.rowcount}
+    eleves = (await db.execute(select(Eleve).where(Eleve.id.in_(ids)))).scalars().all()
+    for e in eleves:
+        await archivage.archiver(db, e, current_user)
+    return {"archived": len(eleves), "deleted": 0}
 
 
 # ── Modèle de fichier (template) ──────────────────────────────────────────────
@@ -478,12 +486,9 @@ async def reimport_eleves_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...
     - Nouvel élève → créé
     """
     content = await read_upload_capped(file)
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    wb = load_workbook_safe(content)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     wb.close()
 
     if len(all_rows) < 2:
@@ -590,12 +595,9 @@ async def import_eleves_xlsx(db: DB, _: AdminUser, file: UploadFile = File(...))
     Les écoles doivent exister au préalable (sinon l'élève est ignoré).
     """
     content = await read_upload_capped(file)
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Impossible de lire le fichier Excel.")
+    wb = load_workbook_safe(content)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = list(iter_rows_capped(ws))
     wb.close()
 
     if not all_rows:

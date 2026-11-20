@@ -1,3 +1,4 @@
+from datetime import datetime
 import uuid
 from typing import Optional
 from pydantic import BaseModel, field_validator
@@ -45,4 +46,5 @@ class EleveResponse(BaseModel):
     school_name:       Optional[str]       = None  # nom de l'école (joint)
     school_region:     Optional[str]       = None  # IEF / région (joint)
 
+    archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}
