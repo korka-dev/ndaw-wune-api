@@ -1,5 +1,5 @@
 # ── Web framework ─────────────────────────────────────────────────────────────
-fastapi==0.115.5
+fastapi==0.165.0
 uvicorn[standard]==0.32.1
 gunicorn==23.0.0
 
@@ -12,10 +12,10 @@ alembic==1.14.0
 redis[asyncio]==5.2.1
 
 # ── Auth / Sécurité ───────────────────────────────────────────────────────────
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]==3.5.0
 bcrypt==4.2.1
-python-multipart==0.0.12
-slowapi==0.1.9
+python-multipart==0.0.31
+slowapi==0.1.10
 
 # ── Validation / Sérialisation ────────────────────────────────────────────────
 pydantic==2.10.3
@@ -28,14 +28,14 @@ pytz==2024.2
 
 # ── Test / HTTP client ────────────────────────────────────────────────────────
 httpx==0.28.1
-pytest==8.3.4
-pytest-asyncio==0.24.0
+pytest==9.0.3
+pytest-asyncio==1.5.0
 
 # PDF parsing
-pdfplumber==0.11.4
+pdfplumber==0.11.10
 
 # Excel (lecture .xlsx et export .xlsx)
 openpyxl==3.1.5
 
 # Métriques Prometheus (endpoint /metrics)
-prometheus-fastapi-instrumentator==7.0.2
+prometheus-fastapi-instrumentator==8.1.0
