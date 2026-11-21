@@ -28,3 +28,6 @@ uploads/
 
 # Sauvegardes (nominatives) — jamais versionnées (APP-48)
 backups/
+
+# Recette locale (secret de session)
+.recette.env

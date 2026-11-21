@@ -1,0 +1,58 @@
+# ==============================================================================
+#  NDAW WUNE — Recette LOCALE sur une copie de la production (lot L5)
+#
+#  Piloté par scripts/recette_locale.sh. Pile isolée (projet « nwn-recette ») :
+#  ports liés à 127.0.0.1 uniquement, aucun service externe contacté (l'API
+#  n'envoie ni notification push, ni e-mail, ni SMS). La base contient des
+#  données nominatives : poste protégé, et `down` supprime tout à la fin.
+# ==============================================================================
+name: nwn-recette
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: recette
+      POSTGRES_USER: recette
+      POSTGRES_PASSWORD: recette
+    ports: ["127.0.0.1:55432:5432"]
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recette -d recette"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:56379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ../..
+      args:
+        APP_COMMIT: ${APP_COMMIT:-recette}
+    # Pas de migration automatique : le script contrôle d'abord les collisions.
+    command: >
+      gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker
+      --workers 2 --bind 0.0.0.0:8000 --timeout 120 --access-logfile -
+    environment:
+      # « test » : ni écho SQL ni valeurs dans les erreurs (copie nominative)
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://recette:recette@db:5432/recette
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${RECETTE_SECRET_KEY:?généré par scripts/recette_locale.sh}
+      CORS_ORIGINS: http://localhost:3100
+      SEANCE_CLEANUP_INTERVAL_SECONDS: "0"
+    ports: ["127.0.0.1:8100:8000"]
+    volumes: [uploads:/app/uploads]
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+volumes:
+  db:
+  uploads:
