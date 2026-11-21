@@ -12,9 +12,9 @@ from __future__ import annotations
 import time
 
 import pytest
-from jose import JWTError
 
 from app.core.security import (
+    JWTError,
     create_token,
     create_token_pair,
     decode_token,

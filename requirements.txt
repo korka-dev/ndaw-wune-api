@@ -12,7 +12,7 @@ alembic==1.14.0
 redis[asyncio]==5.2.1
 
 # ── Auth / Sécurité ───────────────────────────────────────────────────────────
-python-jose[cryptography]==3.5.0
+PyJWT==2.15.1
 bcrypt==4.2.1
 python-multipart==0.0.31
 slowapi==0.1.10

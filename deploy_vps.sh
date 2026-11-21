@@ -18,6 +18,7 @@
 #  Options (variables d'environnement) :
 #    API_DOMAIN=api.exemple.com     domaine public de l'API (défaut : api.ndawwune.cloud)
 #    ADMIN_DOMAIN=admin.exemple.com domaine du dashboard, autorisé en CORS (défaut : admin.ndawwune.cloud)
+#    API_DOMAINS_TRANSITION=a,b     anciens domaines de l'API encore utilisés par des APK (APP-42)
 #    ADMIN_EMAIL=admin@exemple.com  e-mail du compte admin initial (créé une fois au 1er install)
 #    SKIP_CADDY=1                ne pas installer/configurer Caddy
 #    SKIP_FIREWALL=1             ne pas toucher au pare-feu UFW
@@ -38,6 +39,7 @@ header()  { echo -e "\n${BOLD}${CYAN}══════════════�
 
 API_DOMAIN="${API_DOMAIN:-api.ndawwune.cloud}"
 ADMIN_DOMAIN="${ADMIN_DOMAIN:-admin.ndawwune.cloud}"
+API_DOMAINS_TRANSITION="${API_DOMAINS_TRANSITION:-}"
 
 [ "$EUID" -eq 0 ] || err "Ce script doit être lancé en root : sudo bash deploy_vps.sh"
 
@@ -143,7 +145,7 @@ fi
 # ── 4. Conteneurs ─────────────────────────────────────────────────────────────
 header "Étape 4/5 — Build et démarrage (db, redis, backend)"
 docker compose pull db redis
-docker compose up -d --build
+APP_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo inconnu)" docker compose up -d --build
 
 log "Attente du healthcheck (migrations Alembic incluses)..."
 STATUS="starting"
@@ -193,7 +195,11 @@ else
     echo -e "\nimport /etc/caddy/sites/*.caddy" >> /etc/caddy/Caddyfile
   fi
 
-  sed "s/api\.ndawwune\.cloud/${API_DOMAIN}/g" Caddyfile.api > /etc/caddy/sites/ndawwune-api.caddy
+  # API_DOMAINS_TRANSITION (APP-42) : anciens domaines encore inscrits dans les
+  # APK distribués, servis par la même API pendant la fenêtre de transition.
+  SITES="${API_DOMAIN}"
+  for d in ${API_DOMAINS_TRANSITION//,/ }; do SITES="${SITES}, ${d}"; done
+  sed "s/^api\.ndawwune\.cloud {/${SITES} {/" Caddyfile.api > /etc/caddy/sites/ndawwune-api.caddy
 
   if caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
     systemctl enable --now caddy >/dev/null
@@ -209,7 +215,7 @@ fi
 header "Installation terminée"
 docker compose ps
 echo ""
-success "API : https://${API_DOMAIN}/health  (le DNS de ${API_DOMAIN} doit pointer vers ce VPS)"
+success "API : https://${API_DOMAIN}/health/ready  (le DNS de ${API_DOMAIN} doit pointer vers ce VPS)"
 if [ -n "$ADMIN_PASSWORD_GENERATED" ]; then
   echo ""
   echo -e "${BOLD}Compte administrateur créé :${NC}"

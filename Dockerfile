@@ -1,5 +1,10 @@
 FROM python:3.12-slim AS base
 
+# Commit livré (APP-42/45) : affiché par /health/ready pour contrôler une
+# bascule ou un retour arrière. Passé par docker compose (APP_COMMIT).
+ARG APP_COMMIT=inconnu
+ENV APP_COMMIT=${APP_COMMIT}
+
 # Variables d'environnement Python
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -57,5 +62,7 @@ CMD ["sh", "-c", \
        --error-logfile -"]
 
 # ── Healthcheck Docker ────────────────────────────────────────────────────────
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Préparation (APP-45) : base à jour des migrations, Redis et médias accessibles.
+# Le conteneur passe « unhealthy » (visible, alertable) sans redémarrer en boucle.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -fsS http://localhost:8000/health/ready >/dev/null || exit 1

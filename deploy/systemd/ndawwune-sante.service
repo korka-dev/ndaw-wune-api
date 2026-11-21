@@ -1,0 +1,8 @@
+# NDAW WUNE — surveillance de /health/ready, alerte au changement d'état (APP-45).
+[Unit]
+Description=NDAW WUNE - controle de preparation
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ndawwune/exploitation.env
+ExecStart=/opt/ndawwune/api/scripts/surveiller_sante.sh

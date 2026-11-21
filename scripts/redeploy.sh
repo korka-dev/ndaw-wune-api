@@ -30,7 +30,7 @@ if [ ! -f ".env" ]; then err "ndaw-wune/.env manquant !"; exit 1; fi
 
 # ── 1. Build ──────────────────────────────────────────────────────────────────
 log "[1/4] Build de l'image Docker..."
-docker compose build backend
+APP_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo inconnu)" docker compose build backend
 ok "Image buildée."
 echo ""
 
@@ -77,5 +77,5 @@ echo -e "${BOLD}${GREEN}══════════════════�
 echo ""
 docker compose ps
 echo ""
-curl -sf https://api.ndawwune.cloud/health && echo "" || warn "Health check HTTPS non accessible"
+curl -sf "https://${API_DOMAIN:-api.ndawwune.cloud}/health/ready" && echo "" || warn "Health check HTTPS non accessible"
 echo ""

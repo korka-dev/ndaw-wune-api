@@ -96,7 +96,14 @@ class Settings(BaseSettings):
                 o.strip() for o in self.CORS_ORIGINS.split(",")
                 if o.strip().startswith("https://")
             ]
-            return origins or ["https://admin.ndawwune.cloud"]
+            if not origins:
+                # APP-42 : repli historique, signalé — sur le serveur ARED,
+                # CORS_ORIGINS doit nommer explicitement le domaine du dashboard.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "CORS_ORIGINS vide ou sans origine https : repli sur https://admin.ndawwune.cloud.")
+                return ["https://admin.ndawwune.cloud"]
+            return origins
 
         # Développement : origines locales par défaut
         origins = [

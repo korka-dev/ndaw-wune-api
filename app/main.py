@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -9,7 +10,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from jose import JWTError
+from app.core.security import JWTError
 from sqlalchemy import select
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -100,8 +101,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID", "X-App-Version"],
+    # Lisibles par le dashboard : référence support (APP-45) et nom des exports.
+    expose_headers=["X-Request-ID", "X-Export-Id", "Content-Disposition"],
     max_age=600,  # cache preflight 10 min
 )
+
+
+_REQUEST_ID_VALIDE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 
 
 @app.middleware("http")
@@ -110,7 +116,10 @@ async def request_logging_middleware(request: Request, call_next):
     Ajoute un ID unique à chaque requête et logue le temps de réponse.
     Indispensable pour le débogage en production.
     """
-    request_id = str(uuid.uuid4())
+    # APP-45 : un identifiant fourni par le client (X-Request-ID) est repris
+    # s'il est bien formé, pour relier l'erreur affichée au journal serveur.
+    fourni = request.headers.get("x-request-id", "")
+    request_id = fourni if _REQUEST_ID_VALIDE.match(fourni) else str(uuid.uuid4())
     request.state.request_id = request_id
     start = time.perf_counter()
 
@@ -279,7 +288,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         _redact_body_for_log(body_bytes),
     )
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=422,
         content={"detail": errors},
     )
 
@@ -303,9 +312,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         if settings.is_development
         else "Une erreur interne est survenue. Veuillez réessayer."
     )
+    reference = getattr(request.state, "request_id", None)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": detail},
+        content={"detail": detail, "reference": reference},
+        headers={"X-Request-ID": reference} if reference else None,
     )
 
 
@@ -334,7 +345,19 @@ async def app_version_policy() -> dict:
 
 
 @app.get("/health", tags=["Health"], include_in_schema=False)
+@app.get("/health/live", tags=["Health"], include_in_schema=False)
 @limiter.exempt
 async def health() -> dict:
-    """Endpoint de healthcheck pour Docker et le load balancer."""
+    """Disponibilité : le processus répond (aucune dépendance contrôlée)."""
     return {"status": "ok", "app": settings.APP_NAME, "env": settings.APP_ENV}
+
+
+@app.get("/health/ready", tags=["Health"], include_in_schema=False)
+@limiter.exempt
+async def health_ready() -> JSONResponse:
+    """Préparation (APP-45) : base et migrations, Redis, stockage des médias.
+    503 si une dépendance nécessaire manque ; aucun secret dans la réponse."""
+    from app.core.health import preparation
+
+    pret, corps = await preparation()
+    return JSONResponse(status_code=200 if pret else 503, content=corps)

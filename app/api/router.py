@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.core.deps import sync_invalidation_on_admin_write
 
-from app.api.routes import auth
+from app.api.routes import auth, support
 from app.api.routes.admin import (
     sessions, teachers, schools, planning, rapports, users,
     superviseurs, evaluateurs, eleves,
@@ -41,6 +41,7 @@ api_router = APIRouter(prefix="/api/v1")
 _ADMIN_DEPS = [Depends(sync_invalidation_on_admin_write)]
 
 api_router.include_router(auth.router)
+api_router.include_router(support.router)
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 api_router.include_router(users.router,                    prefix="/admin", dependencies=_ADMIN_DEPS)

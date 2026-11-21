@@ -20,13 +20,11 @@ CI de l'admin et du mobile publient le rapport `npm audit` à chaque exécution.
 Vérification : 101 tests passés (dont intégration PostgreSQL + Redis),
 `alembic check` sans écart.
 
-**Résiduel (sans correctif publié) :**
-
-- `python-jose 3.5.0` (PYSEC-2026-4298) et `ecdsa 0.19.2` (PYSEC-2026-1325,
-  dépendance de python-jose). L'API signe en **HS256** avec le moteur
-  `cryptography` : le code ECDSA n'est pas exercé. Action recommandée au lot
-  L5 : remplacer python-jose par PyJWT (changement limité à
-  `app/core/security.py` et `app/core/rate_limit.py`).
+**Résiduel :** aucun depuis le lot L5. `python-jose` (et sa dépendance
+`ecdsa`) est remplacé par **PyJWT 2.15.1** : mêmes jetons HS256 (les sessions
+en cours restent valides), `alg: none` et signatures étrangères refusés
+(tests `test_l5_exploitation.py`). `pip-audit -r requirements.txt` :
+aucune vulnérabilité connue (21/11/2026).
 
 ## Admin (`package.json`)
 

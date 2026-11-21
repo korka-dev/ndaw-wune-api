@@ -4,13 +4,17 @@ import logging
 import uuid
 
 import bcrypt
-from jose import jwt
+import jwt
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 TokenType = Literal["access", "refresh"]
+
+# Erreur levée pour tout jeton invalide, expiré ou mal signé (PyJWT, L5 :
+# remplace python-jose et sa dépendance ecdsa, signalées par l'audit APP-12).
+JWTError = jwt.PyJWTError
 
 _BCRYPT_ROUNDS = 12  # coût CPU raisonnable (≈ 300 ms sur un serveur moderne)
 

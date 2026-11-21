@@ -1,0 +1,12 @@
+# NDAW WUNE — essai de restauration isolé de la dernière sauvegarde (APP-48).
+# Ne touche jamais la production ; la preuve datée est écrite dans la sauvegarde.
+[Unit]
+Description=NDAW WUNE - essai de restauration isole
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ndawwune/exploitation.env
+WorkingDirectory=/opt/ndawwune/api
+ExecStart=/opt/ndawwune/api/scripts/test_restauration.sh
+ExecStopPost=/bin/sh -c '[ "$SERVICE_RESULT" = success ] || /opt/ndawwune/api/scripts/surveiller_sante.sh --alerte "Essai de restauration NDAW WUNE en échec ($SERVICE_RESULT)"'

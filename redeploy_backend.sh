@@ -54,7 +54,7 @@ fi
 # ── Rebuild backend (DB et Redis conservés) ───────────────────────────────────
 header "Étape 2/3 — Rebuild du backend"
 log "Reconstruction de l'image (DB et Redis restent en vie)..."
-docker compose build --no-cache backend
+APP_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo inconnu)" docker compose build --no-cache backend
 success "Image backend reconstruite."
 
 # ── Redémarrage ───────────────────────────────────────────────────────────────
@@ -78,4 +78,4 @@ docker compose ps
 echo ""
 success "Redéploiement backend terminé."
 echo "  Logs : docker compose logs -f backend"
-echo "  Test : curl http://localhost:8000/health"
+echo "  Test : curl http://localhost:8000/health/ready"

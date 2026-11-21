@@ -82,7 +82,7 @@ async def _require_mobile_user_or_token(
     if not raw_token:
         raise HTTPException(status_code=401, detail="Token manquant.")
 
-    from jose import JWTError  # local import pour garder le fichier léger
+    from app.core.security import JWTError  # local import pour garder le fichier léger
     try:
         payload = decode_token(raw_token)
         token_type = payload.get("type")

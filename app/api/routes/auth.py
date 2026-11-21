@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Body
 from fastapi.security import HTTPAuthorizationCredentials
-from jose import JWTError
+from app.core.security import JWTError
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings

@@ -65,6 +65,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Ex. : APP_COMMIT=$(git rev-parse --short HEAD) docker compose build backend
+        APP_COMMIT: ${APP_COMMIT:-inconnu}
     restart: unless-stopped
     env_file: .env
     environment:

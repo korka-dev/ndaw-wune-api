@@ -12,7 +12,7 @@ Limitation de débit commune à toute l'API (rapport V2, APP-11).
 """
 from __future__ import annotations
 
-from jose import JWTError
+from app.core.security import JWTError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from starlette.requests import Request

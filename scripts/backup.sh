@@ -5,15 +5,17 @@
 #  Usage (dans le dossier de l'API, sur le serveur) :
 #    ./scripts/backup.sh                       # sauvegarde dans ./backups
 #    BACKUP_DIR=/srv/nwn-backups RETENTION_DAYS=30 ./scripts/backup.sh
+#    BACKUP_REMOTE=sauvegarde@stockage:/nwn ./scripts/backup.sh   # + copie externe
 #
 #  Produit un dossier horodaté contenant :
 #    db.dump        pg_dump au format custom (restauration : scripts/restore.sh)
 #    uploads.tar.gz contenu du volume des médias (photos, audios, ressources)
 #    SHA256SUMS     empreintes pour vérifier l'intégrité de la copie externe
 #    MANIFEST.txt   date, commit de l'API, nombre de fichiers médias
+#    EFFECTIFS.txt  nombre de lignes des tables principales (preuve de restauration)
 #
-#  Ce script ne remplace PAS : la planification (cron/systemd), la copie hors
-#  du serveur et un essai de restauration régulier — voir docs/SECURITE_EXPLOITATION.md.
+#  Planification : deploy/systemd/ndawwune-backup.timer. Essai de restauration
+#  isolé : scripts/test_restauration.sh. Voir docs/DEPLOIEMENT_ARED.md.
 #  Aucun secret n'est affiché ; le contenu est nominatif : stockage protégé obligatoire.
 # ==============================================================================
 set -euo pipefail
@@ -36,7 +38,10 @@ echo "▶ Sauvegarde des médias…"
 docker compose exec -T backend tar -C /app/uploads -czf - . > "$DEST/uploads.tar.gz"
 NB_MEDIAS="$(tar -tzf "$DEST/uploads.tar.gz" | grep -vc '/$' || true)"
 
-( cd "$DEST" && sha256sum db.dump uploads.tar.gz > SHA256SUMS )
+# Effectifs de référence : comparés automatiquement par scripts/test_restauration.sh.
+docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F= -c "$(cat scripts/effectifs.sql)" > "$DEST/EFFECTIFS.txt"
+
+( cd "$DEST" && sha256sum db.dump uploads.tar.gz EFFECTIFS.txt > SHA256SUMS )
 {
   echo "date_utc=$STAMP"
   echo "api_commit=$(git rev-parse --short HEAD 2>/dev/null || echo inconnu)"
@@ -46,5 +51,18 @@ NB_MEDIAS="$(tar -tzf "$DEST/uploads.tar.gz" | grep -vc '/$' || true)"
 
 # Rotation locale : la copie externe garde sa propre rétention.
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+$RETENTION_DAYS" -exec rm -rf {} +
+
+# Copie hors du serveur (APP-48) : BACKUP_REMOTE=utilisateur@hote:/chemin (rsync/ssh)
+# ou rclone:distant:chemin. Échec de copie = code de sortie non nul (alerte cron).
+if [ -n "${BACKUP_REMOTE:-}" ]; then
+  echo "▶ Copie externe vers ${BACKUP_REMOTE%%:*}:…"
+  case "$BACKUP_REMOTE" in
+    rclone:*) rclone copy "$DEST" "${BACKUP_REMOTE#rclone:}/$STAMP" ;;
+    *)        rsync -a --chmod=D700,F600 "$DEST" "$BACKUP_REMOTE/" ;;
+  esac
+  echo "copie_externe=ok" >> "$DEST/MANIFEST.txt"
+else
+  echo "⚠️  BACKUP_REMOTE non défini : la sauvegarde reste sur ce serveur (insuffisant, APP-48)." >&2
+fi
 
 echo "✅ Sauvegarde terminée : $DEST"

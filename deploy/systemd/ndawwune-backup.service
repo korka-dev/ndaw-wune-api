@@ -1,0 +1,14 @@
+# NDAW WUNE — sauvegarde quotidienne base + médias, avec copie externe (APP-48).
+# Installation : voir docs/DEPLOIEMENT_ARED.md §6. Variables dans /etc/ndawwune/exploitation.env.
+[Unit]
+Description=NDAW WUNE - sauvegarde base et medias
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ndawwune/exploitation.env
+WorkingDirectory=/opt/ndawwune/api
+ExecStart=/opt/ndawwune/api/scripts/backup.sh
+# Échec (dont copie externe) → alerte sur le canal de recette/exploitation.
+ExecStopPost=/bin/sh -c '[ "$SERVICE_RESULT" = success ] || /opt/ndawwune/api/scripts/surveiller_sante.sh --alerte "Sauvegarde NDAW WUNE en échec ($SERVICE_RESULT)"'
