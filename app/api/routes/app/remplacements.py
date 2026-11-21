@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.core.deps import DB, TeacherUser
 from app.core.redis import invalidate_sync_caches
-from app.models.audit_log import AuditLog
+from app.services.audit_service import journaliser
 from app.models.eleve import Eleve
 from app.models.eleve_remplacement import EleveRemplacement
 from app.models.school import School
@@ -105,19 +105,12 @@ async def create_remplacement(
     )
     db.add(remplacement)
 
-    db.add(AuditLog(
-        user_id=current_user.id,
-        user_name=current_user.name,
-        user_role=current_user.role.value,
-        action="create",
-        entity="Remplacements élève",
-        method="POST",
+    journaliser(
+        db, acteur=current_user, action="create", entity="Remplacements élève",
         path="/api/v1/app/remplacements",
-        description=(
-            f"Remplacement — {ancien_nom} → {nouveau_nom} "
-            f"(classe {ancien.classe}) — motif : {body.motif.strip()}"
-        ),
-    ))
+        description=f"Remplacement — {ancien_nom} → {nouveau_nom} (classe {ancien.classe})",
+        cible_type="eleve", cible_id=ancien.id, motif=body.motif,
+    )
 
     await db.commit()
 

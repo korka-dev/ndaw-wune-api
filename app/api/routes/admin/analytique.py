@@ -26,6 +26,7 @@ from sqlalchemy import select, text
 from app.core.database import AsyncSessionLocal
 from app.core.deps import AdminUser, DB
 from app.models.audit_log import AuditLog
+from app.services.audit_service import journaliser
 from app.models.user import User, UserRole
 from app.services import analytique_indicateurs as indic
 from app.services.analytique_pack import construire_zip, dictionnaire, snapshot
@@ -67,11 +68,11 @@ def _autoriser_nominatif(user: User, f: Filtres) -> None:
 
 
 def _journaliser(db: DB, user: User, path: str, contenu: dict) -> None:
-    db.add(AuditLog(
-        user_id=user.id, user_name=user.name, user_role=user.role.value, action="export",
-        entity="Analytique", method="GET", path=path,
+    journaliser(
+        db, acteur=user, action="export", entity="Analytique", method="GET", path=path,
         description=json.dumps(contenu, ensure_ascii=False, default=str),
-    ))
+        cible_type="export",
+    )
 
 
 @router.get("/indicateurs")

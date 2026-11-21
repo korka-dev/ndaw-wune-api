@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, delete, func, select, true
 
 from app.core.export_utils import sanitize_cell
+from app.core.journal import pile, resume_erreur
 from app.core.upload_utils import read_upload_capped, iter_rows_capped, load_workbook_safe
 from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
@@ -489,7 +490,7 @@ async def import_planning(
         await _invalidate_sync_caches()
     except Exception as exc:
         await db.rollback()
-        logger.error("[Planning Import] Erreur au commit : %s", exc)
+        logger.error("[Planning Import] Erreur au commit : %s | %s", resume_erreur(exc), pile(exc))
         raise HTTPException(
             status_code=500,
             detail="Erreur lors de la sauvegarde du planning. Veuillez réessayer.",

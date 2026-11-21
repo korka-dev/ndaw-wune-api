@@ -20,6 +20,9 @@ engine = create_async_engine(
     echo=settings.is_development,
     pool_size=settings.MAX_CONNECTIONS_POOL,
     max_overflow=settings.MAX_OVERFLOW,
+    # APP-13 : les valeurs des requêtes n'apparaissent pas dans les messages
+    # d'erreur SQLAlchemy (et donc pas dans les journaux).
+    hide_parameters=not settings.is_development,
     pool_pre_ping=True,           # détecte les connexions mortes avant utilisation
     pool_recycle=settings.POOL_RECYCLE_SECONDS,  # évite les connexions obsolètes
 )

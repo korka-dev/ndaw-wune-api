@@ -13,7 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.audit_log import AuditLog
+from app.core.journal import pile, resume_erreur
+from app.services.audit_service import journaliser
 from app.models.seance import RapportProf, Seance, SeanceStatus
 from app.schemas.seance import (
     RapportCreate, SeanceComplete, SeanceFinish, SeanceMissedReport, SeancePauseBody, check_coherence_seance,
@@ -262,8 +263,7 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
             return deja
         except SQLAlchemyError as exc:
             await db.rollback()
-            orig = getattr(exc, "orig", exc)
-            logger.error("DB Error lors de start_seance teacher=%s : %s", teacher_id, orig)
+            logger.error("DB Error lors de start_seance teacher=%s : %s", teacher_id, resume_erreur(exc))
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Impossible de créer la séance. Réessayez ou contactez le support.",
@@ -276,8 +276,8 @@ async def start_seance(db: AsyncSession, teacher_id: uuid.UUID, body: SeanceStar
     except Exception as exc:
         # Attrape toute exception inattendue et l'expose en 400 (pas 500)
         logger.error(
-            "Erreur inattendue dans start_seance teacher=%s : %r",
-            teacher_id, exc, exc_info=True,
+            "Erreur inattendue dans start_seance teacher=%s : %s | %s",
+            teacher_id, resume_erreur(exc), pile(exc),
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -419,8 +419,7 @@ async def finish_seance(
             await db.flush()
         except SQLAlchemyError as exc:
             await db.rollback()
-            orig = getattr(exc, "orig", exc)
-            logger.error("DB Error lors de finish_seance seance_id=%s : %s", seance_id, orig)
+            logger.error("DB Error lors de finish_seance seance_id=%s : %s", seance_id, resume_erreur(exc))
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Impossible de clôturer la séance. Réessayez ou contactez le support.",
@@ -432,8 +431,8 @@ async def finish_seance(
         raise
     except Exception as exc:
         logger.error(
-            "Erreur inattendue dans finish_seance seance_id=%s : %r",
-            seance_id, exc, exc_info=True,
+            "Erreur inattendue dans finish_seance seance_id=%s : %s | %s",
+            seance_id, resume_erreur(exc), pile(exc),
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -520,20 +519,15 @@ async def recover_forgotten_seance(
     seance.cloture_mode  = "recuperation"
     seance.finished_at   = None
     seance.duree_minutes = None
-    db.add(AuditLog(
-        user_id=user.id,
-        user_name=user.name,
-        user_role=user.role.value,
-        action="update",
-        entity="Séance",
-        method="POST",
+    journaliser(
+        db, acteur=user, action="update", entity="Séance",
         path=f"/api/v1/app/seances/{seance.id}/cloturer-oubli",
         description=(
             f"Séance oubliée clôturée par le tuteur (classe {seance.classe}, "
             f"démarrée {seance.started_at:%d/%m/%Y %H:%M}) — sans durée mesurée"
-            + (f". Motif : {body.motif.strip()}" if body.motif and body.motif.strip() else "")
         ) if seance.started_at else "Séance oubliée clôturée par le tuteur — sans durée mesurée",
-    ))
+        cible_type="seance", cible_id=seance.id, motif=body.motif,
+    )
     await db.flush()
     await db.refresh(seance)
     return seance
@@ -592,8 +586,7 @@ async def submit_rapport(
             await db.flush()
         except SQLAlchemyError as exc:
             await db.rollback()
-            orig = getattr(exc, "orig", exc)
-            logger.error("DB Error lors de submit_rapport teacher=%s seance_id=%s : %s", teacher_id, body.seance_id, orig)
+            logger.error("DB Error lors de submit_rapport teacher=%s seance_id=%s : %s", teacher_id, body.seance_id, resume_erreur(exc))
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Impossible de soumettre le rapport. Réessayez ou contactez le support.",
@@ -605,8 +598,8 @@ async def submit_rapport(
         raise
     except Exception as exc:
         logger.error(
-            "Erreur inattendue dans submit_rapport teacher=%s seance_id=%s : %r",
-            teacher_id, body.seance_id, exc, exc_info=True,
+            "Erreur inattendue dans submit_rapport teacher=%s seance_id=%s : %s | %s",
+            teacher_id, body.seance_id, resume_erreur(exc), pile(exc),
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

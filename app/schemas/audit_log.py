@@ -17,6 +17,10 @@ class AuditLogResponse(BaseModel):
     method:      str
     path:        str
     description: str
+    cible_type:  Optional[str] = None
+    cible_id:    Optional[str] = None
+    motif:       Optional[str] = None
+    request_id:  Optional[str] = None
     created_at:  datetime
 
     model_config = {"from_attributes": True}

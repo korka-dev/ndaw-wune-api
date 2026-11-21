@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.rapport_journalier import RapportJournalier, RapportJournalierVersion
 from app.models.user import User
 from app.schemas.rapport_journalier import CHAMPS_CORRIGEABLES, RapportAnnulation, RapportCorrection
+from app.services.audit_service import journaliser
 
 # Contenu figé dans l'historique (les photos restent sur le rapport).
 CHAMPS_FIGES = (
@@ -63,6 +64,10 @@ async def annuler(db: AsyncSession, r: RapportJournalier, body: RapportAnnulatio
         return r  # rejeu : idempotent
     _figer(db, r, "annulation", body.motif, acteur)
     r.statut = "annule"
+    journaliser(db, acteur=acteur, action="annulation", entity="Rapports journaliers",
+                description=f"Annulation du rapport du {r.date_rapport:%d/%m/%Y} (version {r.version})",
+                cible_type="rapport_journalier", cible_id=r.id, motif=body.motif,
+                path=f"/rapports/journalier/{r.id}/annuler")
     r.statut_motif = body.motif
     r.statut_par_id = acteur.id
     r.statut_at = datetime.now(timezone.utc)
@@ -83,6 +88,11 @@ async def corriger(db: AsyncSession, r: RapportJournalier, body: RapportCorrecti
     if nb == 0 and absents and absents.strip():
         raise HTTPException(status_code=422, detail="absents renseignés alors que nb_absences vaut 0.")
     _figer(db, r, "correction", body.motif, acteur)
+    journaliser(db, acteur=acteur, action="correction", entity="Rapports journaliers",
+                description=(f"Correction du rapport du {r.date_rapport:%d/%m/%Y} (v{r.version} → v{r.version + 1}) — "
+                             f"champs : {', '.join(sorted(changes))}"),
+                cible_type="rapport_journalier", cible_id=r.id, motif=body.motif,
+                method="PUT", path=f"/rapports/journalier/{r.id}")
     for k, v in changes.items():
         setattr(r, k, v)
     r.version += 1

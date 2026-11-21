@@ -2,7 +2,8 @@
 
 Chaque action de création / modification / suppression effectuée par un
 utilisateur sur les routes d'administration est enregistrée ici, avec
-l'identité de la personne connectée au moment de l'action.
+l'identité de la personne connectée, la cible, le motif éventuel et la
+référence de requête (APP-13). Aucune valeur saisie n'y est recopiée.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     # `alembic check` reste sans écart (APP-27).
     __table_args__ = (
         Index("ix_audit_logs_created_at", "created_at"),
+        Index("ix_audit_logs_cible", "cible_type", "cible_id"),
     )
 
     user_id:   Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
@@ -37,6 +39,13 @@ class AuditLog(Base, UUIDMixin, TimestampMixin):
     method:      Mapped[str]           = mapped_column(String(10),  nullable=False)
     path:        Mapped[str]           = mapped_column(String(255), nullable=False)
     description: Mapped[str]           = mapped_column(Text,        nullable=False)
+
+    # APP-13 : cible précise, motif et référence de requête. Les entrées sont
+    # protégées en base (trigger) : ni modification ni suppression.
+    cible_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    cible_id:   Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    motif:      Mapped[Optional[str]] = mapped_column(Text,       nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     def __repr__(self) -> str:
         return f"<AuditLog {self.user_name!r} {self.action} {self.entity!r}>"

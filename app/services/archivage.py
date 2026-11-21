@@ -24,7 +24,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.audit_log import AuditLog
+from app.services.audit_service import journaliser
 from app.models.eleve import Eleve
 from app.models.eleve_remplacement import EleveRemplacement
 from app.models.evaluation_eleve import EvaluationEleve
@@ -92,17 +92,15 @@ async def historique(db: AsyncSession, obj: Any) -> dict[str, int]:
     return {k: v for k, v in c.items() if v}
 
 
-def _audit(db: AsyncSession, actor: Optional[User], action: str, obj: Any, description: str) -> None:
-    db.add(AuditLog(
-        user_id=actor.id if actor else None,
-        user_name=actor.name if actor else "système",
-        user_role=actor.role.value if actor else "systeme",
-        action=action,
+def _audit(db: AsyncSession, actor: Optional[User], action: str, obj: Any, description: str, motif: Optional[str] = None) -> None:
+    journaliser(
+        db, acteur=actor, action=action,
         entity=LIBELLES.get(type(obj), type(obj).__name__),
         method="DELETE" if action in ("archive", "delete") else "POST",
         path=f"/admin/{type(obj).__tablename__}/{obj.id}",
         description=description,
-    ))
+        cible_type=type(obj).__tablename__, cible_id=obj.id, motif=motif,
+    )
 
 
 async def archiver(db: AsyncSession, obj: Any, actor: Optional[User] = None) -> dict:

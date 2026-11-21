@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.deps import DB, TeacherUser
 from app.core.redis import invalidate_sync_caches
-from app.models.audit_log import AuditLog
+from app.services.audit_service import journaliser
 from app.models.eleve import Eleve
 from app.schemas.eleve import EleveResponse
 from app.schemas.eleve_remplacant import EleveRemplacantCreate
@@ -65,16 +65,12 @@ async def create_remplacant(
             detail="Un élève avec ce nom existe déjà dans cette classe.",
         )
 
-    db.add(AuditLog(
-        user_id=current_user.id,
-        user_name=current_user.name,
-        user_role=current_user.role.value,
-        action="create",
-        entity="Remplaçants élève",
-        method="POST",
+    journaliser(
+        db, acteur=current_user, action="create", entity="Remplaçants élève",
         path="/api/v1/app/remplacants",
         description=f"Remplaçant ajouté — {eleve.prenom or ''} {eleve.nom} (classe {eleve.classe})".strip(),
-    ))
+        cible_type="eleve", cible_id=eleve.id,
+    )
 
     await db.commit()
 

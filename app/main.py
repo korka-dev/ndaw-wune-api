@@ -81,6 +81,7 @@ app = FastAPI(
 
 
 from fastapi.exceptions import RequestValidationError
+from app.core.journal import champs_en_erreur, erreurs_validation, pile, resume_erreur
 
 # ── Wiring du rate limiter ─────────────────────────────────────────────────────
 app.state.limiter = limiter
@@ -163,11 +164,19 @@ async def audit_log_middleware(request: Request, call_next):
     modification ou suppression effectuée sur les routes d'administration,
     avec l'identité de l'utilisateur connecté.
     """
-    response = await call_next(request)
+    from app.services.audit_service import deja_journalise, fermer_contexte, ouvrir_contexte
+
+    _, jeton = ouvrir_contexte(request.state)
+    try:
+        response = await call_next(request)
+        precise = deja_journalise()  # la route a déjà écrit une entrée précise (APP-13)
+    finally:
+        fermer_contexte(jeton)
 
     try:
         if (
-            response.status_code < 400
+            not precise
+            and response.status_code < 400
             and request.method in ("POST", "PUT", "PATCH", "DELETE")
             and "/admin/" in request.url.path
             and not request.url.path.rstrip("/").endswith("/audit-logs")
@@ -192,6 +201,7 @@ async def audit_log_middleware(request: Request, call_next):
                                 user=user,
                                 method=request.method,
                                 path=request.url.path,
+                                request_id=getattr(request.state, "request_id", None),
                             )
     except Exception:
         logger.exception("Échec de l'enregistrement de l'historique des modifications.")
@@ -201,96 +211,20 @@ async def audit_log_middleware(request: Request, call_next):
 
 # ── Gestionnaires d'erreurs globaux ─────────────────────────────────────────────
 
-_SENSITIVE_BODY_KEYS = {
-    "password", "new_password", "confirm_password", "old_password",
-    "current_password", "secret", "secret_key", "token",
-    "access_token", "refresh_token",
-}
-
-
-def _redact_body_for_log(body_bytes: bytes) -> str:
-    """
-    Retourne une version du corps de requête sûre à logger : les mots de
-    passe et tokens sont remplacés par "***", tout le reste est conservé
-    pour le débogage. Si le corps n'est pas du JSON exploitable (upload de
-    fichier, etc.), on ne logue rien plutôt que de risquer de fuiter des
-    données binaires ou non prévues.
-    """
-    import json
-
-    try:
-        parsed = json.loads(body_bytes.decode("utf-8", errors="replace"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return "<corps non-JSON — non loggé>"
-
-    def redact(value):
-        if isinstance(value, dict):
-            return {
-                k: ("***" if k.lower() in _SENSITIVE_BODY_KEYS else redact(v))
-                for k, v in value.items()
-            }
-        if isinstance(value, list):
-            return [redact(v) for v in value]
-        return value
-
-    return json.dumps(redact(parsed), ensure_ascii=False)
-
-
-def _safe_validation_errors(errors: list) -> list:
-    """Rend les erreurs Pydantic v2 JSON-sérialisables (et sûres à logger/renvoyer).
-
-    En Pydantic v2, le champ `ctx` peut contenir l'instance d'exception brute
-    (ex. ValueError) qui n'est pas sérialisable par json.dumps().
-    On convertit toute valeur qui est une Exception en sa repr string.
-
-    Pydantic inclut aussi la valeur brute soumise dans `input` — pour un champ
-    sensible (mot de passe, token…), cette valeur atterrirait en clair à la
-    fois dans les logs ET dans la réponse HTTP 422 renvoyée au client.
-    """
-    safe = []
-    for err in errors:
-        safe_err = {}
-        loc = err.get("loc") or ()
-        is_sensitive_field = any(
-            str(part).lower() in _SENSITIVE_BODY_KEYS for part in loc
-        )
-        for key, val in err.items():
-            if key == "ctx" and isinstance(val, dict):
-                safe_err[key] = {
-                    k: str(v) if isinstance(v, Exception) else v
-                    for k, v in val.items()
-                }
-            elif key == "input" and is_sensitive_field:
-                safe_err[key] = "***"
-            else:
-                safe_err[key] = val
-        safe.append(safe_err)
-    return safe
-
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """Loggue en détail les requêtes invalides pour simplifier le débogage."""
-    body_bytes = b""
-    try:
-        body_bytes = await request.body()
-    except Exception:
-        pass
-
-    errors = _safe_validation_errors(exc.errors())
-
-    logger.error(
-        "⚠️ Erreur de validation (422) sur %s %s [%s] :\n- Erreurs : %s\n- Body reçu (mots de passe/tokens masqués) : %s",
+    """Requête invalide (422) — APP-13 : ni le corps reçu ni les valeurs saisies
+    ne sont journalisés ou renvoyés ; seulement les champs, les règles en échec
+    et la référence de requête."""
+    erreurs = erreurs_validation(exc.errors())
+    logger.warning(
+        "Requête invalide (422) %s %s [%s] : %s",
         request.method,
         request.url.path,
         getattr(request.state, "request_id", "—"),
-        errors,
-        _redact_body_for_log(body_bytes),
+        champs_en_erreur(erreurs),
     )
-    return JSONResponse(
-        status_code=422,
-        content={"detail": errors},
-    )
+    return JSONResponse(status_code=422, content={"detail": erreurs})
 
 
 @app.exception_handler(Exception)
@@ -300,12 +234,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     En développement le message réel est exposé pour faciliter le débogage.
     En production on masque le détail pour ne pas exposer l'internals.
     """
-    logger.exception(
-        "Erreur non gérée sur %s %s [%s] : %r",
+    # APP-13 : type, code SQL et emplacement seulement — le message d'une
+    # exception SQL peut citer les valeurs d'une ligne (nom, téléphone…).
+    logger.error(
+        "Erreur non gérée sur %s %s [%s] : %s | %s",
         request.method,
         request.url.path,
         getattr(request.state, "request_id", "—"),
-        exc,
+        resume_erreur(exc),
+        pile(exc),
     )
     detail = (
         f"{type(exc).__name__}: {exc}"
