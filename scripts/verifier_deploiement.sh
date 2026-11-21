@@ -70,8 +70,10 @@ ETRANGERE="https://origine-non-autorisee.invalid"
 [ -z "$(preflight "$ETRANGERE")" ] && ok "origine étrangère refusée" || ko "origine étrangère AUTORISÉE : CORS trop large"
 
 echo "4. Version mobile"
-V="$(curl -s --max-time 10 "$API_URL/api/v1/app-version")"
-[ -n "$V" ] && ok "/api/v1/app-version : $V" || ko "/api/v1/app-version injoignable"
+V="$(curl -s --max-time 10 -w '\n%{http_code}' "$API_URL/api/v1/app-version")"
+CODE="$(echo "$V" | tail -n1)"
+if [ "$CODE" = "200" ]; then ok "/api/v1/app-version : $(echo "$V" | head -n1)"
+else ko "/api/v1/app-version → $CODE (API antérieure au lot L1 ?)"; fi
 
 echo "5. Métriques"
 CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$API_URL/metrics")"
