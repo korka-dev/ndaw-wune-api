@@ -48,3 +48,19 @@ class EleveResponse(BaseModel):
 
     archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}
+
+
+class EleveStatGroupe(BaseModel):
+    label: str
+    value: int
+
+
+class EleveStats(BaseModel):
+    """Compteurs du résultat filtré, calculés en SQL (APP-38)."""
+    total:       int
+    filles:      int
+    garcons:     int
+    titulaires:  int
+    remplacants: int
+    par_classe:  list[EleveStatGroupe] = []  # top 8
+    par_ecole:   list[EleveStatGroupe] = []  # top 8

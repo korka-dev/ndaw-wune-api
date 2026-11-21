@@ -28,14 +28,22 @@ from app.schemas.rapport_journalier import (
 from app.services import rapport_journalier_service as rj_service
 from app.services.progression_service import active_session_for, check_bornes_campagne
 from app.services.rapport_photos import LIST_COLUMNS, photo_response, photos_de
+from app.services.rapport_reception import contexte_reception, verifier_absents
 
 router = APIRouter(prefix="/rapports/journalier", tags=["App — Rapports Journaliers"])
+
+
+# Champs ajoutés après la mise en service de l'idempotence (lot L4) : absents
+# de l'empreinte quand ils sont vides, pour qu'un rejeu d'une saisie faite
+# avant la mise à jour garde exactement la même empreinte.
+CHAMPS_POSTERIEURS = ("absents_ids", "submitted_at")
 
 
 def content_hash(data: dict) -> str:
     """Empreinte stable du contenu soumis (hors clé d'opération)."""
     canon = json.dumps(
-        {k: v for k, v in data.items() if k != "client_op_id"},
+        {k: v for k, v in data.items()
+         if k != "client_op_id" and not (k in CHAMPS_POSTERIEURS and v is None)},
         sort_keys=True, default=str, ensure_ascii=False, separators=(",", ":"),
     )
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
@@ -110,10 +118,13 @@ async def submit_rapport_journalier(
     await check_bornes_campagne(db, current_user, data["semaine"], data["jour_cours"])
     # Campagne de rattachement (APP-22) : la session active à la réception.
     active = await active_session_for(db, current_user)
+    # Lot L4 : identifiants d'absents vérifiés, rattachements figés à la réception.
+    data["absents_ids"] = await verifier_absents(db, data.get("absents_ids"))
+    contexte = await contexte_reception(db, current_user)
 
     rapport = RapportJournalier(
         teacher_id=current_user.id, client_op_id=op_id, client_op_hash=digest if op_id else None,
-        session_id=active.id if active else None, **data,
+        session_id=active.id if active else None, **contexte, **data,
     )
     try:
         # Point de sauvegarde : deux envois simultanés de la même clé → le

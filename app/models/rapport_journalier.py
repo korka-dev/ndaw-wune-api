@@ -80,6 +80,27 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("program_sessions.id", ondelete="RESTRICT"), nullable=True, index=True,
     )
 
+    # ── Rattachements et traçabilité analytique (lot L4, Partie II D4/D5) ────
+    # Fixés à la RÉCEPTION, jamais recalculés : un changement d'école ou de
+    # superviseur en cours de campagne ne réécrit pas les rapports passés.
+    # NULL pour les rapports antérieurs (aucun rattachement deviné).
+    ecole_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schools.id", ondelete="RESTRICT"), nullable=True, index=True,
+    )
+    # Superviseur responsable à la date de réception (NULL si aucun ou plusieurs).
+    superviseur_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True,
+    )
+    # Identifiants des élèves déclarés absents (liste JSON d'UUID). Le champ
+    # `absents` (noms) reste la valeur saisie lisible.
+    absents_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # Inscrits éligibles (élèves actifs des classes du tuteur) à la réception :
+    # référence de calcul conservée, distincte des effectifs déclarés.
+    effectif_attendu: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Horodatage de la saisie sur le téléphone (submitted_at) ; la réception
+    # serveur est created_at. L'écart mesure le retard de transmission.
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # ── Cycle de vie (APP-31) ────────────────────────────────────────────────
     # soumis → corrige (nouvelle version, motif) → annule (motif). Jamais
     # supprimé : chaque état antérieur est conservé dans rapport_journalier_versions.

@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, List
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -55,6 +55,11 @@ class RapportJournalierCreate(BaseModel):
     reponses_questions:       Optional[str]    = Field(default=None, max_length=50_000)  # objet JSON
     # Clé d'opération générée par le téléphone à la saisie (APP-16).
     client_op_id:             Optional[str]    = Field(default=None, min_length=1, max_length=64)
+    # Lot L4 (D3.3) : identifiants des élèves absents, pour une table
+    # individuelle d'absences liée à l'inscription (les noms restent dans `absents`).
+    absents_ids:              Optional[list[uuid.UUID]] = Field(default=None, max_length=200)
+    # Lot L4 (B1) : horodatage de la saisie sur le téléphone (avec fuseau).
+    submitted_at:             Optional[datetime] = None
 
     @field_validator("ecole", "nom_tuteur")
     @classmethod
@@ -103,11 +108,31 @@ class RapportJournalierCreate(BaseModel):
             raise ValueError("la photo doit être une image (data:image/... ou https://...).")
         return v
 
+    @field_validator("absents_ids")
+    @classmethod
+    def _absents_ids(cls, v: Optional[list[uuid.UUID]]) -> Optional[list[uuid.UUID]]:
+        if v is not None and len(set(v)) != len(v):
+            raise ValueError("un même élève est déclaré absent deux fois.")
+        return v or None
+
+    @field_validator("submitted_at")
+    @classmethod
+    def _submitted_at(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is None:
+            return v
+        if v.tzinfo is None:
+            raise ValueError("submitted_at doit porter un fuseau horaire (ISO 8601).")
+        if v > datetime.now(timezone.utc) + timedelta(days=1):
+            raise ValueError("submitted_at ne peut pas être dans le futur.")
+        return v
+
     @model_validator(mode="after")
     def _coherence(self):
         # Valeur manquante distincte de zéro : pas de liste d'absents sans absence.
         if self.nb_absences == 0 and self.absents and self.absents.strip():
             raise ValueError("absents renseignés alors que nb_absences vaut 0.")
+        if self.absents_ids and len(self.absents_ids) > self.nb_absences:
+            raise ValueError("plus d'élèves absents identifiés que nb_absences.")
         if self.besoin_appui and not (self.domaines_appui or "").strip():
             raise ValueError("domaines_appui requis quand besoin_appui est vrai.")
         return self

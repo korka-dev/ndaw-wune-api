@@ -57,6 +57,7 @@ async def historique(db: AsyncSession, obj: Any) -> dict[str, int]:
     c: dict[str, int] = {}
     if isinstance(obj, School):
         c["eleves"] = await _compte(db, Eleve, Eleve.school_id == obj.id)
+        c["rapports_journaliers"] = await _compte(db, RapportJournalier, RapportJournalier.ecole_id == obj.id)
     elif isinstance(obj, ProgramSession):
         c["seances"] = await _compte(db, Seance, Seance.session_id == obj.id)
         c["rapports_journaliers"] = await _compte(db, RapportJournalier, RapportJournalier.session_id == obj.id)
@@ -66,7 +67,10 @@ async def historique(db: AsyncSession, obj: Any) -> dict[str, int]:
     elif isinstance(obj, User):
         c["seances"] = await _compte(db, Seance, Seance.teacher_id == obj.id)
         c["rapports_seance"] = await _compte(db, RapportProf, RapportProf.teacher_id == obj.id)
-        c["rapports_journaliers"] = await _compte(db, RapportJournalier, RapportJournalier.teacher_id == obj.id)
+        c["rapports_journaliers"] = await _compte(
+            db, RapportJournalier,
+            RapportJournalier.teacher_id == obj.id, RapportJournalier.superviseur_id == obj.id,
+        )
         c["evaluations"] = await _compte(db, EvaluationEleve, EvaluationEleve.superviseur_id == obj.id)
         c["resultats_tirage"] = await _compte(db, EvaluationResultat, EvaluationResultat.superviseur_id == obj.id)
         c["pointages"] = await _compte(

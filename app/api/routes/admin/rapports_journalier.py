@@ -19,7 +19,6 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import Select, func, select, or_
-from sqlalchemy.orm import selectinload
 
 from app.core.deps import AdminUser, DB
 from app.core.export_utils import build_csv_response
@@ -285,6 +284,68 @@ async def get_photo(db: DB, _: AdminUser, rapport_id: uuid.UUID, index: int) -> 
     return photo_response(row["photos_classe_url"], row["photo_classe_url"], index)
 
 
+def _iso(v):
+    return v.isoformat() if v is not None else None
+
+
+EXPORT_COLONNES_SQL = [
+    RapportJournalier.id, RapportJournalier.session_id, RapportJournalier.ecole_id, RapportJournalier.teacher_id,
+    RapportJournalier.superviseur_id, RapportJournalier.date_rapport, RapportJournalier.nom_tuteur,
+    RapportJournalier.ief, RapportJournalier.commune, RapportJournalier.ecole, RapportJournalier.superviseur,
+    RapportJournalier.nb_absences, RapportJournalier.absents, RapportJournalier.absents_ids,
+    RapportJournalier.effectif_attendu, RapportJournalier.semaine, RapportJournalier.jour_cours,
+    RapportJournalier.difficultes, RapportJournalier.autres_difficultes, RapportJournalier.description_difficultes,
+    RapportJournalier.directeur_venu, RapportJournalier.besoin_appui, RapportJournalier.domaines_appui,
+    RapportJournalier.has_observations, RapportJournalier.commentaires, RapportJournalier.soumis_en_offline,
+    RapportJournalier.reponses_questions, RapportJournalier.client_op_id, RapportJournalier.submitted_at,
+    RapportJournalier.created_at, RapportJournalier.updated_at, RapportJournalier.statut,
+    RapportJournalier.version, RapportJournalier.statut_motif, RapportJournalier.statut_at,
+    RapportJournalier.photo_classe_url.is_not(None).label("photo_unique"),
+    (func.length(func.coalesce(RapportJournalier.photos_classe_url, ""))
+     - func.length(func.replace(func.coalesce(RapportJournalier.photos_classe_url, ""), "data:image", ""))
+     ).label("photos_car"),
+]
+# (colonne exportée, extraction) — noms stables en snake_case (D6.3).
+EXPORT_COLONNES = [
+    ("rapport_id",              lambda r: str(r["id"])),
+    ("campagne_id",             lambda r: r["session_id"] and str(r["session_id"])),
+    ("ecole_id",                lambda r: r["ecole_id"] and str(r["ecole_id"])),
+    ("auteur_id",               lambda r: str(r["teacher_id"])),
+    ("superviseur_id",          lambda r: r["superviseur_id"] and str(r["superviseur_id"])),
+    ("date_rapport",            lambda r: _iso(r["date_rapport"])),
+    ("tuteur",                  lambda r: r["nom_tuteur"]),
+    ("ief",                     lambda r: r["ief"]),
+    ("commune",                 lambda r: r["commune"]),
+    ("ecole",                   lambda r: r["ecole"]),
+    ("superviseur",             lambda r: r["superviseur"]),
+    ("nb_absences",             lambda r: r["nb_absences"]),
+    ("absents",                 lambda r: r["absents"]),
+    ("absents_ids",             lambda r: "|".join(r["absents_ids"]) if r["absents_ids"] else None),
+    ("effectif_attendu",        lambda r: r["effectif_attendu"]),
+    ("semaine",                 lambda r: r["semaine"]),
+    ("jour_cours",              lambda r: r["jour_cours"]),
+    ("difficultes",             lambda r: r["difficultes"]),
+    ("autres_difficultes",      lambda r: r["autres_difficultes"]),
+    ("description_difficultes", lambda r: r["description_difficultes"]),
+    ("directeur_venu",          lambda r: r["directeur_venu"]),
+    ("besoin_appui",            lambda r: r["besoin_appui"]),
+    ("domaines_appui",          lambda r: r["domaines_appui"]),
+    ("has_observations",        lambda r: r["has_observations"]),
+    ("commentaires",            lambda r: r["commentaires"]),
+    ("soumis_en_offline",       lambda r: r["soumis_en_offline"]),
+    ("reponses_questions",      lambda r: r["reponses_questions"]),
+    ("nb_photos",               lambda r: (r["photos_car"] // len("data:image")) or (1 if r["photo_unique"] else 0)),
+    ("client_operation_id",     lambda r: r["client_op_id"]),
+    ("submitted_at",            lambda r: _iso(r["submitted_at"])),
+    ("received_at",             lambda r: _iso(r["created_at"])),
+    ("updated_at",              lambda r: _iso(r["updated_at"])),
+    ("statut",                  lambda r: r["statut"]),
+    ("version",                 lambda r: r["version"]),
+    ("statut_motif",            lambda r: r["statut_motif"]),
+    ("statut_at",               lambda r: _iso(r["statut_at"])),
+]
+
+
 @router.get("/export/csv")
 async def export_csv(
     db: DB,
@@ -298,50 +359,23 @@ async def export_csv(
     statut:      Optional[str]       = None,   # soumis | corrige | annule | tous (défaut : hors annulés)
     fields:     Optional[str]       = None,
 ) -> StreamingResponse:
-    """Exporte les rapports journaliers filtrés en CSV."""
+    """Exporte les rapports journaliers filtrés en CSV.
+
+    Lot L4 (D3.3) : clés de jointure (rapport, campagne, école, auteur,
+    superviseur), horodatages de saisie / réception / modification, clé
+    d'opération et réponses aux questions dynamiques. Les photos ne sont plus
+    lues (seul leur nombre) : l'export ne transfère aucun base64."""
     q = _apply_filters(
-        select(RapportJournalier).options(selectinload(RapportJournalier.teacher)),
+        select(*EXPORT_COLONNES_SQL).select_from(RapportJournalier),
         teacher_id=teacher_id, role=role, search=search,
         date_from=date_from, date_to=date_to, ief=ief, statut=statut,
     )
+    rapports = (await db.execute(
+        q.order_by(RapportJournalier.date_rapport, RapportJournalier.created_at, RapportJournalier.id)
+    )).mappings().all()
 
-    rapports = (await db.execute(q.order_by(RapportJournalier.date_rapport))).scalars().all()
-
-    columns = [
-        ("date_rapport",            "date_rapport"),
-        ("tuteur",                  "tuteur"),
-        ("ief",                     "ief"),
-        ("commune",                 "commune"),
-        ("ecole",                   "ecole"),
-        ("superviseur",             "superviseur"),
-        ("nb_absences",             "nb_absences"),
-        ("absents",                 "absents"),
-        ("semaine",                 "semaine"),
-        ("jour_cours",              "jour_cours"),
-        ("difficultes",             "difficultes"),
-        ("autres_difficultes",      "autres_difficultes"),
-        ("description_difficultes", "description_difficultes"),
-        ("directeur_venu",          "directeur_venu"),
-        ("besoin_appui",            "besoin_appui"),
-        ("domaines_appui",          "domaines_appui"),
-        ("has_observations",        "has_observations"),
-        ("commentaires",            "commentaires"),
-        ("soumis_en_offline",       "soumis_en_offline"),
-        ("statut",                  "statut"),
-        ("version",                 "version"),
-        ("statut_motif",            "statut_motif"),
-    ]
-    rows = [
-        [
-            r.date_rapport, r.nom_tuteur, r.ief, r.commune, r.ecole, r.superviseur,
-            r.nb_absences, r.absents, r.semaine, r.jour_cours,
-            r.difficultes, r.autres_difficultes, r.description_difficultes,
-            r.directeur_venu, r.besoin_appui, r.domaines_appui,
-            r.has_observations, r.commentaires, r.soumis_en_offline,
-            r.statut, r.version, r.statut_motif,
-        ]
-        for r in rapports
-    ]
+    columns = [(k, k) for k, _ in EXPORT_COLONNES]
+    rows = [[fn(r) for _, fn in EXPORT_COLONNES] for r in rapports]
 
     return build_csv_response(
         columns=columns,

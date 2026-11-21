@@ -15,6 +15,7 @@ from app.api.routes.admin import (
     eleve_remplacements as admin_eleve_remplacements,
     import_export as admin_import_export,
     comptes_terrain as admin_comptes_terrain,
+    analytique as admin_analytique,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -73,6 +74,7 @@ api_router.include_router(progression_configs.router,        prefix="/admin", de
 api_router.include_router(admin_eleve_remplacements.router,  prefix="/admin", dependencies=_ADMIN_DEPS)  # GET /admin/remplacements
 api_router.include_router(admin_import_export.router,         prefix="/admin", dependencies=_ADMIN_DEPS)  # GET /admin/import-export/export · POST /admin/import-export/import
 api_router.include_router(admin_comptes_terrain.router,       prefix="/admin", dependencies=_ADMIN_DEPS)  # /admin/comptes-terrain — tuteurs & superviseurs, réinitialisation mdp
+api_router.include_router(admin_analytique.router,            prefix="/admin", dependencies=_ADMIN_DEPS)  # /admin/analytique — indicateurs, pack CSV, API analytique (lot L4)
 
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")

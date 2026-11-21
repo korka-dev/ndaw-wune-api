@@ -5,23 +5,24 @@ import csv
 import io
 import uuid as uuid_module
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Annotated, Optional
 
 import pdfplumber
 import openpyxl
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import selectinload
 
+from app.core.database import AsyncSessionLocal
 from app.core.deps import AdminUser, DB
+from app.core.eleve_filters import EST_REMPLACANT
 from app.core.upload_utils import read_upload_capped, iter_rows_capped, load_workbook_safe
 from app.core.export_utils import build_xlsx_response, sanitize_cell
 from app.core.pagination import Page, Pagination
 from app.models.eleve import Eleve
 from app.models.school import School
-from app.schemas.eleve import EleveCreate, EleveUpdate, EleveResponse
+from app.schemas.eleve import EleveCreate, EleveResponse, EleveStatGroupe, EleveStats, EleveUpdate
 from app.services import archivage
 from app.services.archivage import non_archive
 
@@ -222,44 +223,104 @@ async def _bulk_insert(db, rows: list[dict]) -> int:
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
+# ── Filtres, tri et pagination côté serveur (APP-38) ────────────────────────
+# La liste, les compteurs (/stats) et les exports partagent exactement les mêmes
+# filtres : le total affiché, les KPI et le fichier exporté portent sur le même
+# périmètre, sans plafond de chargement côté navigateur.
+
+# Clés de tri autorisées → colonne SQL. Toute autre valeur est refusée (422).
+_TRI_COLONNES = {
+    "nom":        Eleve.nom,
+    "prenom":     Eleve.prenom,
+    "classe":     Eleve.classe,
+    "statut":     Eleve.statut,
+    "type":       Eleve.statut_selection,
+    "ecole":      School.name,
+    "ief":        School.region,
+    "created_at": Eleve.created_at,
+}
+
+
+def _echapper_like(v: str) -> str:
+    return v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+class EleveFiltres:
+    """Filtres communs à la liste, aux compteurs et aux exports d'élèves."""
+
+    def __init__(
+        self,
+        school_id:  Optional[uuid_module.UUID] = None,
+        session_id: Optional[uuid_module.UUID] = None,
+        classe:     Optional[str] = None,
+        search:     Optional[str] = Query(None, max_length=100, description="Nom, prénom ou code élève"),
+        ief:        Optional[str] = Query(None, description="Région de l'école (IEF)"),
+        sexe:       Optional[str] = Query(None, description="Garçon | Fille"),
+        statut:     Optional[str] = Query(None, description="actif | inactif"),
+        type:       Optional[str] = Query(None, pattern="^(titulaire|remplacant)$", description="Titulaire / Remplaçant"),
+        archives:   bool = Query(False, description="Inclure les éléments archivés"),
+        sort:       str = Query("nom", description="Clé de tri : " + ", ".join(_TRI_COLONNES)),
+        order:      str = Query("asc", pattern="^(asc|desc)$"),
+    ) -> None:
+        if sort not in _TRI_COLONNES:
+            raise HTTPException(status_code=422, detail=f"Tri inconnu : {sort}. Valeurs possibles : {', '.join(_TRI_COLONNES)}.")
+        self.school_id, self.session_id, self.classe = school_id, session_id, classe
+        self.search = (search or "").strip() or None
+        self.ief, self.sexe, self.statut, self.type = ief or None, sexe or None, statut or None, type
+        self.archives, self.sort, self.order = archives, sort, order
+
+    def conditions(self) -> list:
+        conds = [non_archive(Eleve, self.archives)]
+        if self.school_id:
+            conds.append(Eleve.school_id == self.school_id)
+        if self.session_id:
+            conds.append(Eleve.session_id == self.session_id)
+        if self.classe:
+            conds.append(Eleve.classe == self.classe)
+        if self.ief:
+            conds.append(School.region == self.ief)
+        if self.sexe:
+            conds.append(func.lower(Eleve.genre) == self.sexe.strip().lower())
+        if self.statut:
+            conds.append(func.lower(Eleve.statut) == self.statut.strip().lower())
+        if self.type == "titulaire":
+            conds.append(func.lower(Eleve.statut_selection) == "titulaire")
+        elif self.type == "remplacant":
+            conds.append(EST_REMPLACANT)
+        if self.search:
+            term = f"%{_echapper_like(self.search)}%"
+            nom_complet = func.concat(Eleve.nom, " ", func.coalesce(Eleve.prenom, ""))
+            nom_inverse = func.concat(func.coalesce(Eleve.prenom, ""), " ", Eleve.nom)
+            conds.append(or_(
+                Eleve.nom.ilike(term, escape="\\"),
+                Eleve.prenom.ilike(term, escape="\\"),
+                Eleve.code_eleve.ilike(term, escape="\\"),
+                nom_complet.ilike(term, escape="\\"),
+                nom_inverse.ilike(term, escape="\\"),
+            ))
+        return conds
+
+    def tri(self) -> list:
+        """Ordre stable : clé demandée, puis nom, prénom et id pour départager."""
+        col = _TRI_COLONNES[self.sort]
+        primaire = (col.desc() if self.order == "desc" else col.asc()).nulls_last()
+        return [primaire, Eleve.nom.asc(), Eleve.prenom.asc().nulls_last(), Eleve.id.asc()]
+
+    def appliquer(self, stmt):
+        """Jointure école (nom, IEF) + filtres. L'école est facultative : jointure externe."""
+        return stmt.outerjoin(School, Eleve.school_id == School.id).where(*self.conditions())
+
+
+Filtres = Annotated[EleveFiltres, Depends(EleveFiltres)]
+
+
 @router.get("", response_model=Page[EleveResponse])
-async def list_eleves(
-    db: DB,
-    _: AdminUser,
-    page: Pagination,
-    school_id:  Optional[uuid_module.UUID] = None,
-    session_id: Optional[uuid_module.UUID] = None,
-    classe:     Optional[str] = None,
-    search:     Optional[str] = None,   # filtre nom/prénom
-    ief:        Optional[str] = None,   # filtre par région (school.region)
-    archives: bool = Query(False, description="Inclure les éléments archivés"),
-) -> Page[EleveResponse]:
-    from sqlalchemy.orm import joinedload
-    from app.models.school import School as SchoolModel
-
-    # Jointure école nécessaire si on filtre par IEF
-    if ief:
-        base = select(Eleve).join(SchoolModel, Eleve.school_id == SchoolModel.id)\
-                            .where(SchoolModel.region == ief)\
-                            .order_by(Eleve.nom)
-    else:
-        base = select(Eleve).order_by(Eleve.nom)
-
-    base = base.where(non_archive(Eleve, archives))
-    if school_id:
-        base = base.where(Eleve.school_id == school_id)
-    if session_id:
-        base = base.where(Eleve.session_id == session_id)
-    if classe:
-        base = base.where(Eleve.classe == classe)
-    if search:
-        term = f"%{search.strip()}%"
-        base = base.where(or_(Eleve.nom.ilike(term), Eleve.prenom.ilike(term)))
-
-    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
-    items_orm = (await db.execute(
-        base.options(selectinload(Eleve.school)).offset(page.skip).limit(page.limit)
-    )).scalars().all()
+async def list_eleves(db: DB, _: AdminUser, page: Pagination, f: Filtres) -> Page[EleveResponse]:
+    total = (await db.execute(f.appliquer(select(func.count(Eleve.id)).select_from(Eleve)))).scalar_one()
+    rows = (await db.execute(
+        f.appliquer(select(Eleve, School.name, School.region).select_from(Eleve))
+        .order_by(*f.tri()).offset(page.skip).limit(page.limit)
+    )).all()
 
     items = [
         EleveResponse(
@@ -273,13 +334,39 @@ async def list_eleves(
             statut_selection=e.statut_selection,
             school_id=e.school_id,
             session_id=e.session_id,
-            school_name=e.school.name if e.school else None,
+            school_name=school_name,
             archived_at=e.archived_at,
-            school_region=e.school.region if e.school else None,
+            school_region=school_region,
         )
-        for e in items_orm
+        for e, school_name, school_region in rows
     ]
     return Page(total=total, skip=page.skip, limit=page.limit, items=items)
+
+
+@router.get("/stats", response_model=EleveStats)
+async def stats_eleves(db: DB, _: AdminUser, f: Filtres) -> EleveStats:
+    """Compteurs agrégés en SQL sur le résultat filtré (KPI et BI de la page Élèves)."""
+    genre = func.lower(Eleve.genre)
+    selection = func.lower(Eleve.statut_selection)
+    agg = (await db.execute(f.appliquer(select(
+        func.count(Eleve.id),
+        func.count(Eleve.id).filter(genre == "fille"),
+        func.count(Eleve.id).filter(genre == "garçon"),
+        func.count(Eleve.id).filter(selection == "titulaire"),
+        func.count(Eleve.id).filter(EST_REMPLACANT),
+    ).select_from(Eleve)))).one()
+
+    async def top(col) -> list[EleveStatGroupe]:
+        n = func.count(Eleve.id)
+        res = (await db.execute(
+            f.appliquer(select(col, n).select_from(Eleve)).group_by(col).order_by(n.desc(), col).limit(8)
+        )).all()
+        return [EleveStatGroupe(label=(lbl or "").strip() or "Non renseignée", value=v) for lbl, v in res]
+
+    return EleveStats(
+        total=agg[0], filles=agg[1], garcons=agg[2], titulaires=agg[3], remplacants=agg[4],
+        par_classe=await top(Eleve.classe), par_ecole=await top(School.name),
+    )
 
 
 @router.post("", response_model=EleveResponse, status_code=status.HTTP_201_CREATED)
@@ -381,33 +468,51 @@ async def download_template_xlsx(_: AdminUser) -> StreamingResponse:
     )
 
 
-# ── Export CSV ────────────────────────────────────────────────────────────────
+# ── Exports (APP-38) ──────────────────────────────────────────────────────────
+# Les exports portent sur TOUT le résultat filtré (mêmes filtres que la liste),
+# sans plafond de pagination. Lecture par lots via un curseur serveur : seules
+# les colonnes utiles sont chargées, jamais d'objets ORM en masse.
+
+_EXPORT_LOT = 2000
+
+
+def _export_select(f: EleveFiltres):
+    return f.appliquer(select(
+        Eleve.nom, Eleve.prenom, Eleve.genre, Eleve.date_naissance,
+        Eleve.classe, Eleve.statut, Eleve.statut_selection,
+    ).select_from(Eleve)).order_by(*f.tri()).execution_options(yield_per=_EXPORT_LOT)
+
 
 @router.get("/export/csv")
-async def export_eleves_csv(db: DB, _: AdminUser) -> StreamingResponse:
-    items = (await db.execute(select(Eleve).order_by(Eleve.nom))).scalars().all()
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["nom", "prenom", "sexe", "date_naissance", "classe", "statut"])
-    for e in items:
-        writer.writerow([sanitize_cell(v) for v in (
-            e.nom, e.prenom or "", e.genre or "", e.date_naissance or "",
-            e.classe, e.statut,
-        )])
-    output.seek(0)
+async def export_eleves_csv(_: AdminUser, f: Filtres) -> StreamingResponse:
+    stmt = _export_select(f)
+
+    async def lignes():
+        # Session propre au flux : la réponse est envoyée après la fin de la route.
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["nom", "prenom", "sexe", "date_naissance", "classe", "statut"])
+        yield output.getvalue()
+        async with AsyncSessionLocal() as s:
+            result = await s.stream(stmt)
+            async for lot in result.partitions():
+                output.seek(0)
+                output.truncate(0)
+                for nom, prenom, genre, naiss, classe, statut, _sel in lot:
+                    writer.writerow([sanitize_cell(v) for v in (
+                        nom, prenom or "", genre or "", naiss or "", classe, statut,
+                    )])
+                yield output.getvalue()
+
     return StreamingResponse(
-        iter([output.getvalue()]),
+        lignes(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=eleves.csv"},
     )
 
 
-# ── Export Excel ──────────────────────────────────────────────────────────────
-
 @router.get("/export/xlsx")
-async def export_eleves_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None) -> StreamingResponse:
-    items = (await db.execute(select(Eleve).order_by(Eleve.nom))).scalars().all()
-
+async def export_eleves_xlsx(db: DB, _: AdminUser, f: Filtres, fields: Optional[str] = None) -> StreamingResponse:
     columns = [
         ("nom",     "Nom",               20),
         ("prenom",  "Prénom",            20),
@@ -417,18 +522,13 @@ async def export_eleves_xlsx(db: DB, _: AdminUser, fields: Optional[str] = None)
         ("statut",  "Statut",            10),
         ("type",    "Type",              14),
     ]
-    rows = [
-        [
-            e.nom,
-            e.prenom or "",
-            e.genre or "",
-            e.date_naissance or "",
-            e.classe,
-            e.statut,
-            e.statut_selection or "",
-        ]
-        for e in items
-    ]
+    rows: list[tuple] = []
+    result = await db.stream(_export_select(f))
+    async for lot in result.partitions():
+        rows.extend(
+            (nom, prenom or "", genre or "", naiss or "", classe, statut, sel or "")
+            for nom, prenom, genre, naiss, classe, statut, sel in lot
+        )
 
     return build_xlsx_response(
         sheet_title="Élèves",

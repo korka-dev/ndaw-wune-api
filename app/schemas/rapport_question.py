@@ -82,5 +82,6 @@ class RapportQuestionResponse(BaseModel):
     active:   bool
     ordre:    int
     cible:    str
+    version:  int = 1   # lot L4 : version du sens de la question
 
     model_config = {"from_attributes": True}
