@@ -10,7 +10,7 @@ Migration Alembic : `t8u9v0w1x2y3_integrite_l3` (réversible).
    par la casse. Lister les cas :
 
    ```bash
-   docker compose exec api python -m scripts.collisions_identifiants
+   docker compose exec -T backend python -m scripts.collisions_identifiants
    ```
 
    Chaque collision est à arbitrer par ARED (quel compte garder, à qui
@@ -19,7 +19,7 @@ Migration Alembic : `t8u9v0w1x2y3_integrite_l3` (réversible).
    sur le seul nom. Les doublons existants se listent avec :
 
    ```bash
-   docker compose exec api python -m scripts.doublons_ecoles
+   docker compose exec -T backend python -m scripts.doublons_ecoles
    ```
 
    La fusion éventuelle reste une décision ARED (rapport pour arbitrage).
