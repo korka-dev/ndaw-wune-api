@@ -44,7 +44,9 @@ leur provenance (« proposé », « global », « campagne »).
 | Calendrier | aucun jour attendu : à générer (jours de classe + exceptions) | Paramètres de campagne → Calendrier |
 | Protocole minuteur | inactif sur toutes les campagnes | Paramètres de campagne → Protocole |
 | Mapping de reprise | colonnes des exports Baseglobale / ElevesAbsents / difficulte / BaseBesoins (`reprise_service.MAPPING_DEFAUT`) | `--mapping fichier.json` du script |
-| Conservation sur le téléphone des saisies déjà envoyées | **pas de purge** tant que la durée n'est pas fixée | décision ARED, puis code |
+| Conservation des audios d'enfants (APP-07) | **pas de purge** | `RETENTION_AUDIOS_JOURS` (`.env`) puis `scripts.purge_retention --appliquer` |
+| Conservation de l'historique des modifications (APP-13) | **pas de purge** | `RETENTION_AUDIT_JOURS` puis `scripts.purge_retention --appliquer` |
+| Conservation sur le téléphone des saisies déjà envoyées (APP-14) | **pas de purge** | `RETENTION_SAISIES_TELEPHONE_JOURS` : l'app purge après chaque synchronisation |
 
 ## 3. Mise en production
 
@@ -76,7 +78,18 @@ Retour arrière de la migration (après sauvegarde) :
 importés par la reprise sont supprimés par le downgrade (ils n'existaient pas
 avant).
 
-## 4. Reprise de l'historique — déroulé
+## 4. Rattachement des données antérieures (APP-22)
+
+Les rapports journaliers et pointages reçus avant L3 n'ont pas de campagne.
+Le script ne rattache que les cas sans ambiguïté (une seule campagne affectée
+au tuteur couvre la date) et liste les autres :
+
+```bash
+docker compose exec -T backend python -m scripts.rattacher_campagnes            # aperçu
+docker compose exec -T backend python -m scripts.rattacher_campagnes --appliquer --detail /app/uploads/cas_rattachement.csv
+```
+
+## 5. Reprise de l'historique — déroulé
 
 À faire d'abord sur une **copie isolée** de la base (recette), puis en production.
 
@@ -102,7 +115,7 @@ validée reste en quarantaine et se réimporte après validation. La page
 « Reprise » montre la réconciliation ; le lot n'est accepté que si tous les
 écarts sont expliqués.
 
-## 5. Actions hors code (scripts fournis)
+## 6. Actions hors code (scripts fournis)
 
 | Fiche | Script | Qui |
 |---|---|---|

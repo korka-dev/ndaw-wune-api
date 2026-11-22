@@ -73,6 +73,8 @@ class MeResponse(BaseModel):
     app_access:          str = "full"
     # APP-33 : accès effectif calculé par le serveur (protocole de recherche).
     minuteur_visible:    bool = True
+    # APP-14 : durée de conservation sur le téléphone des saisies déjà envoyées (None = pas de purge).
+    retention_saisies_jours: Optional[int] = None
     must_change_password: bool = False
 
     model_config = {"from_attributes": True}

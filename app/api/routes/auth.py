@@ -157,6 +157,7 @@ async def me(current_user: CurrentUserPendingOk, db: AsyncSession = Depends(get_
     acces = await acces_effectif(db, current_user)
     out.app_access = acces["app_access"]
     out.minuteur_visible = acces["minuteur_visible"]
+    out.retention_saisies_jours = settings.RETENTION_SAISIES_TELEPHONE_JOURS
     return out
 
 

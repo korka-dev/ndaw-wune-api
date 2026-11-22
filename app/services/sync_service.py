@@ -49,6 +49,8 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
     profile.app_access = acces["app_access"]
     profile.minuteur_visible = acces["minuteur_visible"]
     profile.acces_source = acces["source"]
+    from app.core.config import settings as _settings
+    profile.retention_saisies_jours = _settings.RETENTION_SAISIES_TELEPHONE_JOURS
 
     # ── École ─────────────────────────────────────────────────────────────────
     school_data: SyncSchool | None = None

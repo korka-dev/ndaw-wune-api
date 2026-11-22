@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from urllib.parse import quote, urlsplit, urlunsplit
 from functools import cached_property
-from typing import List, Literal
+from typing import Optional, List, Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     MIN_APP_VERSION: str = ""
     # Dernière version publiée (information affichée par l'app).
     LATEST_APP_VERSION: str = ""
+
+    # ── Durées de conservation (APP-07, APP-13, APP-14) ──────────────────────
+    # Vide = aucune purge tant qu'ARED n'a pas fixé la durée (valeur prudente).
+    # Appliquées par scripts/purge_retention.py (aperçu par défaut) ; la durée
+    # « téléphone » est transmise à l'application, qui supprime localement les
+    # saisies déjà envoyées et plus anciennes que cette durée.
+    RETENTION_AUDIOS_JOURS: Optional[int] = None
+    RETENTION_AUDIT_JOURS: Optional[int] = None
+    RETENTION_SAISIES_TELEPHONE_JOURS: Optional[int] = None
 
     # ── Pagination ────────────────────────────────────────────────────────────
     DEFAULT_PAGE_SIZE: int = 50

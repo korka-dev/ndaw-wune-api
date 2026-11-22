@@ -426,3 +426,75 @@ async def test_affectation_datee_conservee(client, tag):
         ts = (await s.execute(select(TeacherSession).where(TeacherSession.teacher_id == t["tuteur"].id))).scalar_one()
         assert (datetime.now(timezone.utc) - ts.created_at).days >= 29  # date d'arrivée conservée
     _ = UserGroupe, DemandeAppui
+
+
+# ── APP-22 : rattachement des données antérieures ─────────────────────────────
+
+async def test_rattachement_campagnes_sans_ambiguite(client):
+    from scripts import rattacher_campagnes as rc
+
+    t = await _terrain(client, "ratt")
+    r = await client.post(RJ, headers=t["ht"], json=_rj("ratt"))
+    assert r.status_code in (200, 201), r.text
+    rid = r.json()["id"]
+    async with AsyncSessionLocal() as s:
+        await s.execute(text("UPDATE rapports_journalier SET session_id = NULL WHERE id = :i"), {"i": rid})
+        await s.commit()
+
+    apercu = await rc.traiter(appliquer=False, detail=None)
+    assert apercu["rapports_journalier"]["rattachables"] >= 1
+    async with AsyncSessionLocal() as s:
+        assert (await s.get(RapportJournalier, uuid.UUID(rid))).session_id is None   # aperçu : aucune écriture
+
+    await rc.traiter(appliquer=True, detail=None)
+    async with AsyncSessionLocal() as s:
+        assert (await s.get(RapportJournalier, uuid.UUID(rid))).session_id == t["camp"].id
+
+    # Deux campagnes couvrant la date pour le même tuteur : ambigu, jamais deviné.
+    async with AsyncSessionLocal() as s:
+        autre = ProgramSession(name="Autre ratt", date_debut=date(TODAY.year, 1, 1),
+                               date_fin=date(TODAY.year, 12, 31), status=SessionStatus.active)
+        s.add(autre)
+        await s.flush()
+        s.add(TeacherSession(teacher_id=t["tuteur"].id, session_id=autre.id))
+        await s.execute(text("UPDATE rapports_journalier SET session_id = NULL WHERE id = :i"), {"i": rid})
+        await s.commit()
+    await rc.traiter(appliquer=True, detail=None)
+    async with AsyncSessionLocal() as s:
+        assert (await s.get(RapportJournalier, uuid.UUID(rid))).session_id is None
+
+
+# ── APP-07 / APP-13 : purge de conservation ──────────────────────────────────
+
+async def test_purge_retention(monkeypatch, tmp_path):
+    import os
+    from app.core.config import settings
+    from app.models.audit_log import AuditLog
+    from scripts import purge_retention as pr
+
+    # Sans durée fixée : rien n'est purgé.
+    monkeypatch.setattr(settings, "RETENTION_AUDIOS_JOURS", None)
+    monkeypatch.setattr(settings, "RETENTION_AUDIT_JOURS", None)
+    assert await pr.traiter(appliquer=True) == {"audios": None, "audit": None}
+
+    monkeypatch.setattr(settings, "UPLOADS_DIR", str(tmp_path))
+    vieux, recent = tmp_path / "eval_audio_vieux.m4a", tmp_path / "eval_audio_recent.m4a"
+    vieux.write_bytes(b"x"); recent.write_bytes(b"y")
+    t = (datetime.now() - timedelta(days=400)).timestamp()
+    os.utime(vieux, (t, t))
+    async with AsyncSessionLocal() as s:
+        s.add(AuditLog(user_name="test", user_role="admin", action="read", entity="Ancien", description="ancienne entrée", method="GET", path="/test",
+                       created_at=datetime.now(timezone.utc) - timedelta(days=400)))
+        await s.commit()
+
+    monkeypatch.setattr(settings, "RETENTION_AUDIOS_JOURS", 365)
+    monkeypatch.setattr(settings, "RETENTION_AUDIT_JOURS", 365)
+    apercu = await pr.traiter(appliquer=False)
+    assert apercu["audios"]["fichiers"] == 1 and apercu["audit"]["entrees"] >= 1
+    assert vieux.exists()
+
+    await pr.traiter(appliquer=True)
+    assert not vieux.exists() and recent.exists()
+    async with AsyncSessionLocal() as s:
+        n = (await s.execute(text("SELECT count(*) FROM audit_logs WHERE created_at < now() - interval '365 days'"))).scalar_one()
+        assert n == 0
