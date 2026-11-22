@@ -26,7 +26,7 @@ CATEGORIES = {"materiel", "local", "eleves", "securite", "autre", "pedagogie", "
 # RET13 : la question pédagogique (superviseur) et l'assistance technique n'ont
 # pas le même destinataire. ARED fixe qui répond ; « equipe_programme » = dashboard.
 DESTINATAIRES = {"equipe_programme", "superviseur", "support_technique"}
-CONTEXTES = {"classe", "rapport", "difficulte", "eleve"}
+CONTEXTES = {"classe", "rapport", "difficulte", "eleve", "ecran"}   # ecran : signalement RET10
 
 
 class RemarqueIn(BaseModel):

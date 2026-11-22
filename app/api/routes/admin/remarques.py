@@ -33,6 +33,11 @@ class RemarqueAdminOut(BaseModel):
     reponse_admin:     Optional[str] = None
     reponse_admin_at:  Optional[str] = None
     created_at:        str
+    # L7 / RET13 : à qui s'adresse le message et à quoi il se rattache
+    destinataire:      Optional[str] = None
+    contexte_type:     Optional[str] = None
+    contexte_id:       Optional[str] = None
+    reponse_par_nom:   Optional[str] = None
 
 
 class RemarqueStatusIn(BaseModel):
@@ -53,6 +58,10 @@ def _to_out(r: Remarque) -> RemarqueAdminOut:
         reponse_admin=r.reponse_admin,
         reponse_admin_at=r.reponse_admin_at.isoformat() if r.reponse_admin_at else None,
         created_at=r.created_at.isoformat(),
+        destinataire=r.destinataire,
+        contexte_type=r.contexte_type,
+        contexte_id=r.contexte_id,
+        reponse_par_nom=r.reponse_par_nom,
     )
 
 
@@ -63,8 +72,11 @@ async def list_remarques(
     page: Pagination,
     categorie: Optional[str] = None,
     statut: Optional[str] = None,
+    destinataire: Optional[str] = None,
 ) -> Page[RemarqueAdminOut]:
     base = select(Remarque).order_by(Remarque.created_at.desc())
+    if destinataire:
+        base = base.where(Remarque.destinataire == destinataire)
     if categorie:
         base = base.where(Remarque.categorie == categorie)
     if statut:
