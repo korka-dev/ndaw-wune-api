@@ -17,6 +17,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.deps import DB, TeacherUser
 from app.core.redis import invalidate_sync_caches
 from app.services.audit_service import journaliser
@@ -25,6 +26,7 @@ from app.models.eleve_remplacement import EleveRemplacement
 from app.models.school import School
 from app.schemas.eleve_remplacement import EleveRemplacementCreate, EleveRemplacementResponse
 from app.services.school_service import get_matching_school_ids
+from app.services.terrain_service import appliquer
 
 router = APIRouter(prefix="/remplacements", tags=["App — Remplacement élève"])
 
@@ -90,8 +92,17 @@ async def create_remplacement(
     ancien_nom = _nom_complet(ancien)
     nouveau_nom = _nom_complet(nouveau)
 
-    ancien.statut = "inactif"
-    nouveau.statut_selection = "Titulaire"
+    # RET03 : selon la règle fixée par ARED, effet immédiat ou demande à valider.
+    a_valider = settings.REMPLACEMENT_VALIDATION == "superviseur"
+    if a_valider:
+        deja = (await db.execute(
+            select(EleveRemplacement.id).where(
+                EleveRemplacement.statut == "en_attente",
+                (EleveRemplacement.ancien_eleve_id == ancien.id) | (EleveRemplacement.nouveau_eleve_id == nouveau.id),
+            ).limit(1)
+        )).scalar_one_or_none()
+        if deja:
+            raise HTTPException(status_code=409, detail="Une demande de remplacement est déjà en attente pour cet élève.")
 
     remplacement = EleveRemplacement(
         ancien_eleve_id=ancien.id,
@@ -102,13 +113,17 @@ async def create_remplacement(
         teacher_id=current_user.id,
         school_id=current_user.school_id,
         classe=ancien.classe,
+        statut="en_attente" if a_valider else "applique",
     )
+    if not a_valider:
+        appliquer(remplacement, ancien, nouveau, None)
     db.add(remplacement)
 
     journaliser(
         db, acteur=current_user, action="create", entity="Remplacements élève",
         path="/api/v1/app/remplacements",
-        description=f"Remplacement — {ancien_nom} → {nouveau_nom} (classe {ancien.classe})",
+        description=(f"Demande de remplacement — {ancien_nom} → {nouveau_nom} (classe {ancien.classe}), à valider"
+                     if a_valider else f"Remplacement — {ancien_nom} → {nouveau_nom} (classe {ancien.classe})"),
         cible_type="eleve", cible_id=ancien.id, motif=body.motif,
     )
 
@@ -122,3 +137,13 @@ async def create_remplacement(
 
     await db.refresh(remplacement)
     return remplacement
+
+
+@router.get("", response_model=list[EleveRemplacementResponse])
+async def mes_remplacements(current_user: TeacherUser, db: DB) -> list[EleveRemplacementResponse]:
+    """RET03 : historique des remplacements du tuteur (dates, motifs, décisions)."""
+    rows = (await db.execute(
+        select(EleveRemplacement).where(EleveRemplacement.teacher_id == current_user.id)
+        .order_by(EleveRemplacement.created_at.desc()).limit(200)
+    )).scalars().all()
+    return [EleveRemplacementResponse.model_validate(r) for r in rows]

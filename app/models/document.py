@@ -43,6 +43,12 @@ class Document(UUIDMixin, TimestampMixin, Base):
     # Langue nationale à laquelle ce document s'adresse (ex: "wolof"). NULL = toutes langues.
     langue: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # Classement terrain (retours terrain, RET08) : activité, niveau et
+    # version affichés dans l'app avant téléchargement.
+    activite: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    niveau: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     # Qui a uploadé le fichier
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
-from typing import Optional
+from datetime import date, datetime
+from typing import Literal, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -38,5 +38,15 @@ class EleveRemplacementResponse(BaseModel):
     school_commune:     Optional[str]       = None  # commune de l'école (joint)
     classe:             str
     date_remplacement:  date
+    # RET03 : applique | en_attente | refuse
+    statut:             str = "applique"
+    decide_le:          Optional[datetime] = None
+    motif_refus:        Optional[str] = None
+    created_at:         Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class DecisionRemplacement(BaseModel):
+    decision: Literal["valider", "refuser"]
+    motif:    Optional[str] = None

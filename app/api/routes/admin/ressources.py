@@ -47,6 +47,9 @@ async def upload_document(
     description: str | None = Form(default=None),
     resource_type: str | None = Form(default=None),
     langue: str | None = Form(default=None),
+    activite: str | None = Form(default=None),
+    niveau: str | None = Form(default=None),
+    version: str | None = Form(default=None),
 ) -> DocumentResponse:
     # Nom original nettoyé (garde uniquement le nom de base, sans chemin)
     original_filename = Path(file.filename or "fichier").name
@@ -94,6 +97,9 @@ async def upload_document(
         description=(description or "").strip() or None,
         resource_type=effective_type,
         langue=(langue or "").strip() or None,
+        activite=(activite or "").strip()[:100] or None,
+        niveau=(niveau or "").strip()[:50] or None,
+        version=(version or "").strip()[:30] or None,
         uploaded_by=current_user.id,
     )
     db.add(doc)
@@ -118,6 +124,9 @@ async def update_document(doc_id: uuid.UUID, payload: DocumentUpdate, db: DB, _:
         doc.description = (data["description"] or "").strip() or None
     if "langue" in data:
         doc.langue = (data["langue"] or "").strip() or None
+    for champ, borne in (("activite", 100), ("niveau", 50), ("version", 30)):
+        if champ in data:
+            setattr(doc, champ, (data[champ] or "").strip()[:borne] or None)
 
     await db.commit()
     await db.refresh(doc)

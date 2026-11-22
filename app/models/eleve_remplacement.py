@@ -6,7 +6,9 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Date, ForeignKey, String, Text, func
+from datetime import datetime
+
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +40,16 @@ class EleveRemplacement(Base, UUIDMixin, TimestampMixin):
     classe: Mapped[str] = mapped_column(String(50), nullable=False)
 
     date_remplacement: Mapped[date] = mapped_column(Date, server_default=func.current_date(), nullable=False)
+
+    # ── Validation (retours terrain, RET03) ──────────────────────────────────
+    # applique : effet réalisé (mode « immediat » ou après validation) ;
+    # en_attente : demande du tuteur, aucun élève modifié ; refuse : motif_refus.
+    statut: Mapped[str] = mapped_column(String(15), nullable=False, default="applique",
+                                        server_default="applique", index=True)
+    decide_par_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    decide_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    motif_refus: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     def __repr__(self) -> str:
         return f"<EleveRemplacement {self.ancien_eleve_nom!r} -> {self.nouveau_eleve_nom!r}>"

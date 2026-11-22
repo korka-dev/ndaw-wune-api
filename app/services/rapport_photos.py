@@ -14,9 +14,10 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from fastapi.responses import Response
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from app.models.rapport_journalier import RapportJournalier
+from app.models.user import User
 
 
 # Nombre de photos calculé DANS Postgres, sans rapatrier le base64 : on compte
@@ -51,6 +52,10 @@ LIST_COLUMNS = [
     RapportJournalier.statut, RapportJournalier.version, RapportJournalier.statut_motif,
     RapportJournalier.statut_at, RapportJournalier.session_id,
     NB_PHOTOS.label("nb_photos"),
+    # Retours terrain : date de saisie sur le téléphone (RET02) et retour du superviseur (RET05).
+    RapportJournalier.submitted_at,
+    RapportJournalier.retour_superviseur, RapportJournalier.retour_le,
+    select(User.name).where(User.id == RapportJournalier.retour_par_id).scalar_subquery().label("retour_par"),
 ]
 
 

@@ -13,7 +13,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func
 
@@ -24,9 +24,10 @@ from app.models.rapport_question import RapportQuestion
 from app.models.rapport_journalier import RAPPORT_COMPTE, RapportJournalier
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
-from app.schemas.sync import SyncRapportQuestion
+from app.schemas.sync import ParametresTerrain, SyncRapportQuestion
 from app.services.progression_service import get_config_for
 from app.services.supervisor_service import get_supervised_teacher_ids
+from app.services.terrain_service import enregistrer_contact, parametres_terrain
 
 router = APIRouter(prefix="/supervisor", tags=["App — Superviseur"])
 
@@ -90,12 +91,13 @@ class SupervisorSyncPayload(BaseModel):
     rapport_libelles: dict[str, str] = {}
     nb_semaines: int = 10
     nb_jours:    int = 3
+    parametres_terrain: ParametresTerrain = ParametresTerrain()
 
 
 # ── Route ─────────────────────────────────────────────────────────────────────
 
 @router.get("/sync", response_model=SupervisorSyncPayload)
-async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSyncPayload:
+async def supervisor_sync(current_user: SuperviseurUser, db: DB, request: Request) -> SupervisorSyncPayload:
     """
     Télécharge les données de synchronisation pour un superviseur de terrain.
     Appelé au login et à chaque retour en ligne.
@@ -224,7 +226,9 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB) -> SupervisorSy
         db, None, session.id if session else None
     )
 
+    await enregistrer_contact(db, current_user, request.headers.get("x-app-version"), None, None)
     return SupervisorSyncPayload(
+        parametres_terrain=ParametresTerrain(**parametres_terrain()),
         synced_at=datetime.now(timezone.utc).isoformat(),
         profile=profile,
         school=school_info,

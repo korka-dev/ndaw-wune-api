@@ -15,6 +15,10 @@ class DocumentResponse(BaseModel):
     description: str | None
     resource_type: str = "document"
     langue: str | None = None
+    # RET08 : classement terrain
+    activite: str | None = None
+    niveau: str | None = None
+    version: str | None = None
     uploaded_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
@@ -33,3 +37,6 @@ class DocumentUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
     langue: str | None = None
+    activite: str | None = None
+    niveau: str | None = None
+    version: str | None = None

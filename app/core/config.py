@@ -70,6 +70,26 @@ class Settings(BaseSettings):
     RETENTION_AUDIT_JOURS: Optional[int] = None
     RETENTION_SAISIES_TELEPHONE_JOURS: Optional[int] = None
 
+    # ── Règles terrain (retours tuteurs et superviseurs, lot L7) ─────────────
+    # Valeurs par défaut = comportement actuel, en attendant la décision d'ARED.
+    # RET03 : « immediat » (le tuteur remplace directement) ou « superviseur »
+    # (le remplacement attend la validation du superviseur ou de l'admin).
+    REMPLACEMENT_VALIDATION: str = "immediat"
+    # RET11 : photo de la classe exigée dans le rapport journalier.
+    PHOTO_RAPPORT_OBLIGATOIRE: bool = True
+    # RET06 : préalerte avant la fin d'une activité (secondes ; vide = aucune).
+    MINUTEUR_PREALERTE_SECONDES: Optional[int] = None
+    # RET06 : signal sonore en fin d'activité (notification, écran verrouillé compris).
+    MINUTEUR_SON: bool = True
+    # RET07 : le tuteur peut proposer un changement de groupe (validé par l'admin).
+    PROPOSITION_GROUPE_ACTIVE: bool = True
+    # RET09/RET10 : canal d'assistance affiché dans l'aide (texte libre, vide = non affiché)
+    # et systèmes pris en charge (affichés avant installation).
+    SUPPORT_CONTACT: str = ""
+    SYSTEMES_SUPPORTES: str = "Android 8 ou plus récent"
+    # RET13 : nombre maximal de rappels envoyés par jour au tuteur (vide = pas de plafond).
+    RAPPELS_MAX_PAR_JOUR: Optional[int] = 2
+
     # ── Pagination ────────────────────────────────────────────────────────────
     DEFAULT_PAGE_SIZE: int = 50
     MAX_PAGE_SIZE: int = 10000
@@ -180,6 +200,21 @@ class Settings(BaseSettings):
                 "SECRET_KEY doit contenir au moins 32 caractères. "
                 "Générez-en un avec : python -c \"import secrets; print(secrets.token_hex(64))\""
             )
+        return v
+
+    @field_validator("RETENTION_AUDIOS_JOURS", "RETENTION_AUDIT_JOURS", "RETENTION_SAISIES_TELEPHONE_JOURS",
+                     "MINUTEUR_PREALERTE_SECONDES", "RAPPELS_MAX_PAR_JOUR", mode="before")
+    @classmethod
+    def entier_vide_absent(cls, v: object) -> object:
+        """« CLE= » dans le .env signifie « non fixé », pas une erreur de démarrage."""
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("REMPLACEMENT_VALIDATION")
+    @classmethod
+    def mode_remplacement(cls, v: str) -> str:
+        v = (v or "immediat").strip().lower()
+        if v not in ("immediat", "superviseur"):
+            raise ValueError("REMPLACEMENT_VALIDATION doit valoir « immediat » ou « superviseur ».")
         return v
 
     @field_validator("DATABASE_URL")
