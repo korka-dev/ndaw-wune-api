@@ -14,11 +14,13 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import func, select
 
 from app.core.deps import DB, SuperviseurUser
 from app.core.eleve_filters import EST_TITULAIRE
 from app.models.eleve import Eleve
+from app.models.terrain import EvaluationAbsence
 from app.models.evaluation_eleve import EvaluationEleve
 from app.models.session import ProgramSession, SessionStatus
 from app.models.user import User
@@ -71,8 +73,16 @@ class EvaluationIn(BaseModel):
 MAX_LOT_EVALUATIONS = 500
 
 
+class AbsenceIn(BaseModel):
+    eleve_id:  str
+    date_eval: str       # ISO YYYY-MM-DD
+
+
 class EvaluationBatch(BaseModel):
-    evaluations: list[EvaluationIn] = Field(max_length=MAX_LOT_EVALUATIONS)
+    evaluations: list[EvaluationIn] = Field(default_factory=list, max_length=MAX_LOT_EVALUATIONS)
+    # RET04 : élèves tirés au sort mais absents ce jour-là. Enregistrés comme
+    # tels — jamais remplacés automatiquement par un autre élève.
+    absents: list[AbsenceIn] = Field(default_factory=list, max_length=MAX_LOT_EVALUATIONS)
 
 
 class EvaluationOut(BaseModel):
@@ -296,7 +306,7 @@ async def submit_evaluations(
     Succès : un résultat par entrée (`cree`, `mis_a_jour`, `inchange`), si
     bien qu'un rejeu du même lot est sans effet et sans doublon.
     """
-    if not body.evaluations:
+    if not body.evaluations and not body.absents:
         raise HTTPException(status_code=422, detail="La liste d'évaluations est vide.")
 
     # Session active (optionnelle — liée pour le suivi)
@@ -343,16 +353,34 @@ async def submit_evaluations(
             continue
         vus[cle] = i
         parsed.append((i, eleve_uuid, eval_date, _EQUIVALENCES_RESULTAT[ev.resultat], ev))
+    # Absences : même prévalidation (index décalés après les évaluations).
+    absences: list[tuple[uuid.UUID, date]] = []
+    base = len(body.evaluations)
+    for j, ab in enumerate(body.absents):
+        try:
+            a_uuid, a_date = uuid.UUID(ab.eleve_id), date.fromisoformat(ab.date_eval)
+        except ValueError:
+            erreurs.append({"index": base + j, "eleve_id": ab.eleve_id, "competence": None, "erreur": "absence invalide."})
+            continue
+        if a_date > demain or a_date < DATE_EVAL_MIN:
+            erreurs.append({"index": base + j, "eleve_id": ab.eleve_id, "competence": None, "erreur": "date hors période."})
+            continue
+        if any(eid == a_uuid and d == a_date for _, eid, d, _, _ in parsed):
+            erreurs.append({"index": base + j, "eleve_id": ab.eleve_id, "competence": None,
+                            "erreur": "élève à la fois absent et évalué le même jour."})
+            continue
+        absences.append((a_uuid, a_date))
     if erreurs:
         raise _lot_invalide(erreurs)
 
     # Élèves existants, puis périmètre de supervision.
-    ids = list({p[1] for p in parsed})
+    ids = list({p[1] for p in parsed} | {a for a, _ in absences})
     existants = set((await db.execute(select(Eleve.id).where(Eleve.id.in_(ids)))).scalars().all())
     erreurs = [
         {"index": i, "eleve_id": ev.eleve_id, "competence": ev.competence, "erreur": "élève introuvable."}
         for i, eid, _, _, ev in parsed if eid not in existants
-    ]
+    ] + [{"index": None, "eleve_id": str(a), "competence": None, "erreur": "élève introuvable."}
+         for a, _ in absences if a not in existants]
     if erreurs:
         raise _lot_invalide(erreurs)
     allowed = await filter_supervised_eleve_ids(db, current_user, ids)
@@ -360,7 +388,8 @@ async def submit_evaluations(
         {"index": i, "eleve_id": ev.eleve_id, "competence": ev.competence,
          "erreur": "élève hors de votre périmètre de supervision."}
         for i, eid, _, _, ev in parsed if eid not in allowed
-    ]
+    ] + [{"index": None, "eleve_id": str(a), "competence": None,
+          "erreur": "élève hors de votre périmètre de supervision."} for a, _ in absences if a not in allowed]
     if erreurs:
         raise _lot_invalide(erreurs, code="HORS_PERIMETRE", http=status.HTTP_403_FORBIDDEN)
 
@@ -418,7 +447,17 @@ async def submit_evaluations(
         resultats.append({"index": i, "id": str(existing.id), "eleve_id": ev.eleve_id,
                           "competence": competence, "date_eval": ev.date_eval, "statut": statut})
 
+    # RET04 : absences idempotentes (un rejeu ne crée pas de doublon).
+    nb_absents = 0
+    for a_uuid, a_date in absences:
+        stmt = pg_insert(EvaluationAbsence).values(
+            id=uuid.uuid4(), eleve_id=a_uuid, superviseur_id=current_user.id, session_id=session_id,
+            date_eval=a_date, created_at=now, updated_at=now,
+        ).on_conflict_do_nothing(constraint="uq_evaluation_absence_eleve_date")
+        nb_absents += (await db.execute(stmt)).rowcount or 0
+
     await db.flush()
     created = sum(r["statut"] == "cree" for r in resultats)
     updated = sum(r["statut"] == "mis_a_jour" for r in resultats)
-    return {"created": created, "updated": updated, "total": len(resultats), "resultats": resultats}
+    return {"created": created, "updated": updated, "total": len(resultats), "resultats": resultats,
+            "absents_enregistres": nb_absents, "absents": len(absences)}

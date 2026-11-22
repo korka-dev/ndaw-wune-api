@@ -39,3 +39,5 @@ from app.models.demande_appui import DemandeAppui, DemandeAppuiEvenement  # noqa
 from app.models.recherche import AssignationRecherche                 # noqa: F401
 from app.models.reprise import LotReprise, CorrespondanceReprise, RepriseLigne  # noqa: F401
 from app.models.cle_service import CleService                         # noqa: F401
+# Lot L7 (retours des tuteurs et superviseurs, enquêtes NWV 2026)
+from app.models.terrain import ContactApp, PropositionGroupe, EvaluationAbsence  # noqa: F401

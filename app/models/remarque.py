@@ -42,6 +42,16 @@ class Remarque(Base, UUIDMixin, TimestampMixin):
     reponse_admin:    Mapped[Optional[str]]      = mapped_column(Text, nullable=True)
     reponse_admin_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # ── Échanges suivis (retours terrain, RET13) ────────────────────────────
+    # destinataire : equipe_programme (défaut, dashboard) | superviseur
+    # (superviseurs affectés au tuteur) | support_technique.
+    destinataire: Mapped[str] = mapped_column(String(20), nullable=False, default="equipe_programme",
+                                              server_default="equipe_programme", index=True)
+    # Objet de l'échange : classe, rapport ou difficulté (identifiant, jamais de contenu).
+    contexte_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    contexte_id:   Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reponse_par_nom: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+
     user: Mapped[Optional["User"]] = relationship("User", foreign_keys=[user_id])
 
     def __repr__(self) -> str:

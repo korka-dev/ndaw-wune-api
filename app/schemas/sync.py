@@ -77,6 +77,9 @@ class SyncEleve(BaseModel):
     prenom: Optional[str]
     classe: str
     statut_selection: Optional[str] = None   # "Titulaire" | "Remplaçant" | None (Base NWV 2026 / RCT)
+    # RET07 : groupes pédagogiques affichés au tuteur (lecture seule côté app).
+    groupe_lecture: Optional[str] = None
+    groupe_maths:   Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -107,6 +110,19 @@ class SyncStats(BaseModel):
     nb_fiches: int = 0   # ressources documentaires disponibles pour sa langue
 
 
+class ParametresTerrain(BaseModel):
+    """Règles terrain fixées par ARED (lot L7) ; défauts = comportement existant."""
+    remplacement_validation: str = "immediat"
+    photo_rapport_obligatoire: bool = True
+    minuteur_prealerte_secondes: Optional[int] = None
+    minuteur_son: bool = True
+    proposition_groupe_active: bool = True
+    support_contact: Optional[str] = None
+    systemes_supportes: Optional[str] = None
+    rappels_max_par_jour: Optional[int] = None
+    latest_app_version: Optional[str] = None
+
+
 class SyncPayload(BaseModel):
     """Payload complet téléchargé par l'app mobile pour fonctionner hors-ligne."""
     synced_at:        datetime
@@ -125,3 +141,4 @@ class SyncPayload(BaseModel):
     nb_semaines: int = 10
     nb_jours:    int = 3
     stats:       SyncStats = SyncStats()
+    parametres_terrain: ParametresTerrain = ParametresTerrain()

@@ -102,7 +102,13 @@ async def matrice(db: AsyncSession, session: ProgramSession) -> dict:
         select(User).join(TeacherSession, TeacherSession.teacher_id == User.id)
         .where(TeacherSession.session_id == session.id, User.role == UserRole.enseignant).order_by(User.name)
     )).scalars().all()
-    lignes, comptes = [], {"traitement": 0, "controle": 0, "non_assigne": 0, "incoherents": 0, "exceptions": 0}
+    lignes, comptes = [], {"traitement": 0, "controle": 0, "non_assigne": 0, "incoherents": 0, "exceptions": 0,
+                           "ecarts_telephone": 0, "jamais_synchronises": 0}
+    # RET15 : ce que le téléphone a réellement reçu à sa dernière synchronisation.
+    from app.models.terrain import ContactApp
+    contacts = {c.user_id: c for c in (await db.execute(
+        select(ContactApp).where(ContactApp.user_id.in_([u.id for u in tuteurs]))
+    )).scalars()} if tuteurs else {}
     for u in tuteurs:
         eff = await acces_effectif(db, u, session)
         attendu = acces_matrice(_groupe(u), u.app_access or "full")
@@ -110,7 +116,17 @@ async def matrice(db: AsyncSession, session: ProgramSession) -> dict:
         comptes[_groupe(u) or "non_assigne"] += 1
         comptes["incoherents"] += int(incoherent)
         comptes["exceptions"] += int(eff["exception"])
+        c = contacts.get(u.id)
+        # Écart : le téléphone a reçu un accès au minuteur différent de l'accès effectif
+        # actuel (version ancienne, synchronisation antérieure au dernier changement…).
+        ecart = c is not None and c.minuteur_expose is not None and c.minuteur_expose != eff["minuteur_visible"]
+        comptes["ecarts_telephone"] += int(ecart)
+        comptes["jamais_synchronises"] += int(c is None)
         lignes.append({
+            "version_app": c.version_app if c else None,
+            "derniere_sync_le": c.derniere_sync_le if c else None,
+            "minuteur_expose": c.minuteur_expose if c else None,
+            "ecart_telephone": ecart,
             "user_id": u.id, "nom": u.name, "groupe_recherche": _groupe(u), "app_access_stocke": u.app_access,
             "app_access_attendu": attendu, "app_access_effectif": eff["app_access"],
             "minuteur_visible": eff["minuteur_visible"], "source": eff["source"], "exception": eff["exception"],

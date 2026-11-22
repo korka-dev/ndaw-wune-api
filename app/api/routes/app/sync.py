@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 
 from app.core.deps import DB, TeacherUser
 from app.core.redis import get_redis
 from app.core.config import settings
-from app.schemas.sync import SyncPayload
+from app.schemas.sync import ParametresTerrain, SyncPayload
 from app.services.sync_service import build_sync_payload
+from app.services.terrain_service import enregistrer_contact, parametres_terrain
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ _CACHE_PREFIX = "sync:"
 
 
 @router.get("", response_model=SyncPayload)
-async def sync(current_user: TeacherUser, db: DB) -> SyncPayload:
+async def sync(current_user: TeacherUser, db: DB, request: Request) -> SyncPayload:
     """
     Télécharge toutes les données nécessaires pour fonctionner hors-ligne.
     Le résultat est mis en cache Redis (TTL = SYNC_CACHE_TTL_SECONDS).
@@ -32,7 +33,7 @@ async def sync(current_user: TeacherUser, db: DB) -> SyncPayload:
         redis  = await get_redis()
         cached = await redis.get(cache_key)
         if cached:
-            return SyncPayload.model_validate_json(cached)
+            return await _finaliser(db, current_user, request, SyncPayload.model_validate_json(cached))
     except Exception as exc:
         logger.warning("[Sync] Redis indisponible (lecture) : %s — fallback DB", exc)
         redis = None  # type: ignore[assignment]
@@ -47,6 +48,14 @@ async def sync(current_user: TeacherUser, db: DB) -> SyncPayload:
         except Exception as exc:
             logger.warning("[Sync] Redis indisponible (écriture) : %s", exc)
 
+    return await _finaliser(db, current_user, request, payload)
+
+
+async def _finaliser(db, user, request: Request, payload: SyncPayload) -> SyncPayload:
+    """Règles terrain toujours à jour (hors cache) et trace de la synchronisation (RET15)."""
+    payload.parametres_terrain = ParametresTerrain(**parametres_terrain())
+    await enregistrer_contact(db, user, request.headers.get("x-app-version"),
+                              payload.profile.minuteur_visible, payload.profile.app_access)
     return payload
 
 

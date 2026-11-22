@@ -23,6 +23,7 @@ from app.api.routes.admin import (
     recherche as admin_recherche,
     cles_service as admin_cles_service,
     reprise as admin_reprise,
+    terrain as admin_terrain,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -41,6 +42,8 @@ from app.api.routes.app import (
     remplacements as app_remplacements,
     remplacants as app_remplacants,
     supervisor_visites,
+    supervisor_terrain,
+    terrain as app_terrain,
 )
 from app.api.routes import service as service_routes
 
@@ -88,7 +91,7 @@ api_router.include_router(admin_analytique.router,            prefix="/admin", d
 
 # Lot L6 (rapport V2, Partie II D8-D10, APP-33)
 for _r in (admin_visites, admin_demandes_appui, admin_campagnes, admin_tableau_bord,
-           admin_recherche, admin_cles_service, admin_reprise):
+           admin_recherche, admin_cles_service, admin_reprise, admin_terrain):
     api_router.include_router(_r.router, prefix="/admin", dependencies=_ADMIN_DEPS)
 
 # ── Accès de service (clé d'API, lecture seule, pseudonymisé) ─────────────────
@@ -113,3 +116,6 @@ api_router.include_router(app_remarques.router,             prefix="/app")  # /a
 api_router.include_router(app_remplacements.router,         prefix="/app")  # POST /app/remplacements
 api_router.include_router(app_remplacants.router,           prefix="/app")  # POST /app/remplacants
 api_router.include_router(supervisor_visites.router,        prefix="/app")  # /app/supervisor/visites · grilles-visite · demandes-appui (L6)
+# Lot L7 (retours des tuteurs et superviseurs)
+api_router.include_router(supervisor_terrain.router,        prefix="/app")  # /app/supervisor/remplacements · rapports-tuteurs · tuteurs-activite · messages
+api_router.include_router(app_terrain.router,               prefix="/app")  # /app/propositions-groupe · /app/mes-resultats

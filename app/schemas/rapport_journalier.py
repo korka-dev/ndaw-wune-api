@@ -177,6 +177,11 @@ class RapportJournalierAdminListItem(BaseModel):
     statut_motif:             Optional[str] = None
     statut_at:                Optional[datetime] = None
     session_id:               Optional[uuid.UUID] = None
+    # Retours terrain (RET02, RET05)
+    submitted_at:             Optional[datetime] = None
+    retour_superviseur:       Optional[str] = None
+    retour_le:                Optional[datetime] = None
+    retour_par:               Optional[str] = None
 
     model_config = {"from_attributes": True}
 

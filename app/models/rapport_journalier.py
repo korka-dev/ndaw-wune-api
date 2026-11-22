@@ -125,6 +125,14 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("lots_reprise.id", ondelete="RESTRICT"), nullable=True, index=True,
     )
 
+    # ── Retour du superviseur (retours terrain, RET05) ───────────────────────
+    # Commentaire écrit par un superviseur affecté au tuteur ; visible par le
+    # tuteur dans son historique. Le remplacer conserve l'audit de l'ancien.
+    retour_superviseur: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    retour_par_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    retour_le: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # ── Relations ─────────────────────────────────────────────────────────────
     teacher: Mapped["User"] = relationship("User", foreign_keys=[teacher_id])
 

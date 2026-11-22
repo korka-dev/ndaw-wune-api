@@ -51,7 +51,7 @@ def content_hash(data: dict) -> str:
 
 
 def _light(rapport: RapportJournalier) -> RapportJournalierListItem:
-    data ={f: getattr(rapport, f) for f in RapportJournalierListItem.model_fields if f != "nb_photos"}
+    data = {f: getattr(rapport, f) for f in RapportJournalierListItem.model_fields if f not in ("nb_photos", "retour_par")}
     data["nb_photos"] = len(photos_de(rapport.photos_classe_url, rapport.photo_classe_url))
     return RapportJournalierListItem(**data)
 
