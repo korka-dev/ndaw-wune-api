@@ -162,7 +162,7 @@ class RapportJournalierAdminListItem(BaseModel):
     difficultes:              str
     autres_difficultes:       Optional[str]
     description_difficultes:  Optional[str]
-    directeur_venu:           bool
+    directeur_venu:           Optional[bool] = None
     besoin_appui:             bool
     domaines_appui:           Optional[str]
     has_observations:         bool
@@ -202,7 +202,7 @@ class RapportJournalierResponse(BaseModel):
     difficultes:              str
     autres_difficultes:       Optional[str]
     description_difficultes:  Optional[str]
-    directeur_venu:           bool
+    directeur_venu:           Optional[bool] = None
     besoin_appui:             bool
     domaines_appui:           Optional[str]
     has_observations:         bool

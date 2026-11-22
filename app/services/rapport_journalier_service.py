@@ -64,6 +64,9 @@ async def annuler(db: AsyncSession, r: RapportJournalier, body: RapportAnnulatio
         return r  # rejeu : idempotent
     _figer(db, r, "annulation", body.motif, acteur)
     r.statut = "annule"
+    # Lot L6 : un rapport annulé ne compte plus dans l'assiduité.
+    from app.services.presences_service import retirer_pour_rapport
+    await retirer_pour_rapport(db, r.id)
     journaliser(db, acteur=acteur, action="annulation", entity="Rapports journaliers",
                 description=f"Annulation du rapport du {r.date_rapport:%d/%m/%Y} (version {r.version})",
                 cible_type="rapport_journalier", cible_id=r.id, motif=body.motif,

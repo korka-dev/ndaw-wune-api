@@ -54,7 +54,9 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
     description_difficultes:  Mapped[Optional[str]]  = mapped_column(Text, nullable=True)
 
     # ── Observations ─────────────────────────────────────────────────────────
-    directeur_venu:   Mapped[bool]          = mapped_column(Boolean, nullable=False)
+    # NULL uniquement pour une ligne reprise de l'historique où la donnée n'a
+    # pas été collectée (D10.2 : une donnée absente n'est pas inventée).
+    directeur_venu:   Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     besoin_appui:     Mapped[bool]          = mapped_column(Boolean, nullable=False)
     domaines_appui:   Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list
     has_observations: Mapped[bool]          = mapped_column(Boolean, default=False, nullable=False)
@@ -112,6 +114,16 @@ class RapportJournalier(Base, UUIDMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
     )
     statut_at:     Mapped[Optional[datetime]]  = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # ── Origine (lot L6, D10.2) ──────────────────────────────────────────────
+    # application | reprise. Une ligne reprise garde l'identifiant de sa
+    # soumission source (Kobo `_uuid`) et son lot d'import.
+    source: Mapped[str] = mapped_column(String(15), nullable=False, default="application",
+                                        server_default="application", index=True)
+    source_submission_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    lot_reprise_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("lots_reprise.id", ondelete="RESTRICT"), nullable=True, index=True,
+    )
 
     # ── Relations ─────────────────────────────────────────────────────────────
     teacher: Mapped["User"] = relationship("User", foreign_keys=[teacher_id])

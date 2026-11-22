@@ -171,3 +171,20 @@ sudo systemctl enable --now ndawwune-backup.timer ndawwune-restauration.timer nd
 | APP-46 | Matrice ancien/nouveau client × API ; file d'attente préservée | APK N-1 avec saisies en file, puis API L5, puis `MIN_APP_VERSION` relevé : écran de mise à jour, file conservée et envoyée après mise à jour |
 | APP-48 | Restauration datée et chronométrée, effectifs et fichiers cohérents, copie hors serveur | `RESTAURATION_<date>.txt` conforme ; présence de la copie sur `BACKUP_REMOTE` |
 | Terrain | Validation par tuteurs, superviseurs et admin sur ARED | Parcours de recette L1 sur le serveur ARED |
+
+## 9. Lot L6 (modules de la Partie II)
+
+Détail et valeurs par défaut : `docs/LOT_L6_MODULES.md`. En bref :
+
+1. Sauvegarde vérifiée (`scripts/backup.sh`), puis `./redeploy_backend.sh` sur
+   `lot-L6-modules` : la migration `w1x2y3z4a5b6` s'applique au démarrage
+   (`docker compose exec -T backend alembic current` pour vérifier).
+2. Rebuild du dashboard sur `lot-L6-modules` (aucune nouvelle variable).
+3. Timer optionnel du rapport périodique : `ndawwune-rapport.timer` (§6, même
+   procédure d'installation ; `RAPPORTS_DIR` et le webhook dans
+   `/etc/ndawwune/exploitation.env`).
+4. Mobile 1.2.0 : **nouvel APK** (SQLCipher, verrou), recette §2 de
+   `RECETTE_TERRAIN_L2.md`, puis `MIN_APP_VERSION=1.2.0`.
+5. Paramétrage par ARED dans le dashboard : calendrier, obligations, seuils,
+   publication de la grille de visite, protocole minuteur.
+6. Retour arrière : `alembic downgrade v0w1x2y3z4a5` (après sauvegarde).

@@ -31,3 +31,11 @@ from app.models.eleve_remplacement import EleveRemplacement          # noqa: F40
 from app.models.rapport_difficulte_resolution import RapportDifficulteResolution  # noqa: F401
 from app.models.rapport_journalier import RapportJournalierVersion    # noqa: F401
 from app.models.evaluation_resultat import EvaluationResultatHistorique  # noqa: F401
+# Lot L6 (rapport V2, Partie II D8-D10, APP-14/33)
+from app.models.campagne import CampagneJour, CampagneObligation, SeuilAlerte  # noqa: F401
+from app.models.presence_eleve import PresenceEleve                   # noqa: F401
+from app.models.visite import GrilleVisite, GrilleVisiteItem, Visite, VisiteReponse  # noqa: F401
+from app.models.demande_appui import DemandeAppui, DemandeAppuiEvenement  # noqa: F401
+from app.models.recherche import AssignationRecherche                 # noqa: F401
+from app.models.reprise import LotReprise, CorrespondanceReprise, RepriseLigne  # noqa: F401
+from app.models.cle_service import CleService                         # noqa: F401

@@ -198,6 +198,8 @@ async def update_user(
         assert_can_manage(actor, user, allowed_roles, evaluateur_only=evaluateur_only)
 
     data = body.model_dump(exclude_none=True)
+    motif_protocole = data.pop("motif_protocole", None)
+    avant_recherche = (user.groupe_recherche.value if user.groupe_recherche else None, user.app_access or "full")
     if data.get("email"):
         data["email"] = normalize_email(data["email"])
     email = data.get("email")
@@ -220,6 +222,10 @@ async def update_user(
 
     for field, value in data.items():
         setattr(user, field, value)
+
+    # APP-33 : tout changement de groupe ou d'accès est tracé (historique immuable).
+    from app.services.recherche_service import apres_modification
+    await apres_modification(db, user, avant_recherche, actor, motif_protocole)
 
     await db.flush()
     await db.refresh(user, attribute_names=["school"])

@@ -43,6 +43,12 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
     """
     # ── Profil ────────────────────────────────────────────────────────────────
     profile = SyncProfile.model_validate(user)
+    # APP-33 : l'accès au minuteur est décidé par le serveur.
+    from app.services.recherche_service import acces_effectif
+    acces = await acces_effectif(db, user)
+    profile.app_access = acces["app_access"]
+    profile.minuteur_visible = acces["minuteur_visible"]
+    profile.acces_source = acces["source"]
 
     # ── École ─────────────────────────────────────────────────────────────────
     school_data: SyncSchool | None = None

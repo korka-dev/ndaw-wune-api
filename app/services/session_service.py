@@ -92,6 +92,7 @@ async def assign_teachers(
     db: AsyncSession,
     session_id: uuid.UUID,
     teacher_ids: list[uuid.UUID],
+    acteur=None,
 ) -> None:
     """
     Remplace intégralement les assignations de la session.
@@ -110,11 +111,26 @@ async def assign_teachers(
                 detail=f"Enseignants introuvables : {[str(i) for i in missing]}",
             )
 
-    # Supprimer les anciennes assignations
-    await db.execute(delete(TeacherSession).where(TeacherSession.session_id == session_id))
-
-    # Insérer les nouvelles
-    for tid in teacher_ids:
+    # Lot L6 (affectations datées, D2.2) : seules les différences sont
+    # appliquées. Une affectation conservée garde sa date d'origine
+    # (`created_at` = arrivée dans la campagne), utilisée pour calculer les
+    # soumissions attendues ; un retrait est inscrit à l'historique.
+    actuels = set((await db.execute(
+        select(TeacherSession.teacher_id).where(TeacherSession.session_id == session_id)
+    )).scalars().all())
+    voulus = set(teacher_ids)
+    retires = actuels - voulus
+    if retires:
+        await db.execute(delete(TeacherSession).where(
+            TeacherSession.session_id == session_id, TeacherSession.teacher_id.in_(retires),
+        ))
+        from app.services.audit_service import journaliser
+        noms = (await db.execute(select(User.name).where(User.id.in_(retires)))).scalars().all()
+        journaliser(db, acteur=acteur, action="retrait", entity="Sessions",
+                    description=f"Retrait de {len(retires)} acteur(s) de la campagne : {', '.join(sorted(noms))[:900]}",
+                    cible_type="session", cible_id=session_id, method="POST",
+                    path=f"/sessions/{session_id}/teachers")
+    for tid in voulus - actuels:
         db.add(TeacherSession(teacher_id=tid, session_id=session_id))
 
     await db.flush()

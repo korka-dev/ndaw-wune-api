@@ -28,6 +28,7 @@ from app.schemas.rapport_journalier import (
 from app.services import rapport_journalier_service as rj_service
 from app.services.progression_service import active_session_for, check_bornes_campagne
 from app.services.rapport_photos import LIST_COLUMNS, photo_response, photos_de
+from app.services.presences_service import generer_depuis_rapport
 from app.services.rapport_reception import contexte_reception, verifier_absents
 
 router = APIRouter(prefix="/rapports/journalier", tags=["App — Rapports Journaliers"])
@@ -137,6 +138,9 @@ async def submit_rapport_journalier(
         if existing is None:
             raise
         return _replay_or_conflict(existing, digest)
+    # Lot L6 (D8 assiduité) : présences individuelles du jour, si la liste
+    # identifiée des absents est transmise.
+    await generer_depuis_rapport(db, rapport, current_user)
     await db.refresh(rapport)
     return _light(rapport)
 

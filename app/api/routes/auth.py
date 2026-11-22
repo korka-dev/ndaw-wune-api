@@ -150,9 +150,14 @@ async def refresh(request: Request, body: RefreshRequest = Body(...), db: AsyncS
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(current_user: CurrentUserPendingOk) -> MeResponse:
-    """Retourne le profil de l'utilisateur connecté."""
-    return MeResponse.model_validate(current_user)
+async def me(current_user: CurrentUserPendingOk, db: AsyncSession = Depends(get_db)) -> MeResponse:
+    """Retourne le profil de l'utilisateur connecté (accès effectif APP-33)."""
+    from app.services.recherche_service import acces_effectif
+    out = MeResponse.model_validate(current_user)
+    acces = await acces_effectif(db, current_user)
+    out.app_access = acces["app_access"]
+    out.minuteur_visible = acces["minuteur_visible"]
+    return out
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)

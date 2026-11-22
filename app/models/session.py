@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime
 from typing import List, Optional
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +33,12 @@ class ProgramSession(Base, UUIDMixin, TimestampMixin):
         nullable=False,
     )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # APP-33 : quand True, l'accès au minuteur des tuteurs de cette campagne
+    # suit la matrice du protocole de recherche (traitement = minuteur visible,
+    # contrôle = minuteur masqué), contrôlée par le serveur. False = réglage
+    # individuel `app_access` (comportement antérieur), tant qu'ARED n'a pas
+    # validé le protocole.
+    protocole_minuteur: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     # ── Relations ─────────────────────────────────────────────────────────────
     teacher_assignments: Mapped[List["TeacherSession"]] = relationship(

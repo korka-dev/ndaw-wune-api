@@ -33,6 +33,8 @@ class SessionUpdate(BaseModel):
     date_fin:    Optional[date]          = None
     description: Optional[str]          = None
     status:      Optional[SessionStatus] = None
+    # APP-33 : active la matrice du protocole de recherche pour le minuteur.
+    protocole_minuteur: Optional[bool]   = None
 
 
 class SessionResponse(BaseModel):
@@ -42,6 +44,7 @@ class SessionResponse(BaseModel):
     date_fin:    date
     status:      SessionStatus
     description: Optional[str]
+    protocole_minuteur: bool = False
 
     archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}

@@ -16,6 +16,13 @@ from app.api.routes.admin import (
     import_export as admin_import_export,
     comptes_terrain as admin_comptes_terrain,
     analytique as admin_analytique,
+    visites as admin_visites,
+    demandes_appui as admin_demandes_appui,
+    campagnes as admin_campagnes,
+    tableau_bord as admin_tableau_bord,
+    recherche as admin_recherche,
+    cles_service as admin_cles_service,
+    reprise as admin_reprise,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -33,7 +40,9 @@ from app.api.routes.app import (
     remarques as app_remarques,
     remplacements as app_remplacements,
     remplacants as app_remplacants,
+    supervisor_visites,
 )
+from app.api.routes import service as service_routes
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -77,6 +86,14 @@ api_router.include_router(admin_import_export.router,         prefix="/admin", d
 api_router.include_router(admin_comptes_terrain.router,       prefix="/admin", dependencies=_ADMIN_DEPS)  # /admin/comptes-terrain — tuteurs & superviseurs, réinitialisation mdp
 api_router.include_router(admin_analytique.router,            prefix="/admin", dependencies=_ADMIN_DEPS)  # /admin/analytique — indicateurs, pack CSV, API analytique (lot L4)
 
+# Lot L6 (rapport V2, Partie II D8-D10, APP-33)
+for _r in (admin_visites, admin_demandes_appui, admin_campagnes, admin_tableau_bord,
+           admin_recherche, admin_cles_service, admin_reprise):
+    api_router.include_router(_r.router, prefix="/admin", dependencies=_ADMIN_DEPS)
+
+# ── Accès de service (clé d'API, lecture seule, pseudonymisé) ─────────────────
+api_router.include_router(service_routes.router)
+
 # ── App mobile ────────────────────────────────────────────────────────────────
 api_router.include_router(sync.router,                     prefix="/app")
 api_router.include_router(seances.router,                  prefix="/app")
@@ -95,3 +112,4 @@ api_router.include_router(app_usage.router,                 prefix="/app")  # PO
 api_router.include_router(app_remarques.router,             prefix="/app")  # /app/remarques
 api_router.include_router(app_remplacements.router,         prefix="/app")  # POST /app/remplacements
 api_router.include_router(app_remplacants.router,           prefix="/app")  # POST /app/remplacants
+api_router.include_router(supervisor_visites.router,        prefix="/app")  # /app/supervisor/visites · grilles-visite · demandes-appui (L6)

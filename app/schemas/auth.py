@@ -71,6 +71,8 @@ class MeResponse(BaseModel):
     title:               Optional[str]
     school_id:           Optional[str]
     app_access:          str = "full"
+    # APP-33 : accès effectif calculé par le serveur (protocole de recherche).
+    minuteur_visible:    bool = True
     must_change_password: bool = False
 
     model_config = {"from_attributes": True}

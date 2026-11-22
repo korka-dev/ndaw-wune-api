@@ -18,6 +18,9 @@ class SyncProfile(BaseModel):
     classes:   Optional[List[str]]
     groupe_recherche: Optional[str] = None
     app_access: str = "full"
+    # APP-33 : accès effectif calculé par le serveur (protocole de recherche).
+    minuteur_visible: bool = True
+    acces_source: str = "reglage"
 
     model_config = {"from_attributes": True}
 

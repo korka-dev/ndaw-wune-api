@@ -1,0 +1,13 @@
+# NDAW WUNE — rapport périodique automatique (rapport V2, D9.4).
+# Listes nominatives écrites sur le serveur (RAPPORTS_DIR, droits 600) ; le
+# webhook ne reçoit qu'une synthèse chiffrée. Voir docs/LOT_L6_MODULES.md.
+[Unit]
+Description=NDAW WUNE - rapport periodique (relances, assiduite, supervision, appui)
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ndawwune/exploitation.env
+WorkingDirectory=/opt/ndawwune/api
+ExecStart=/usr/bin/docker compose exec -T -e ALERTE_WEBHOOK_URL -e ALERTE_ENVIRONNEMENT backend python -m scripts.rapport_periodique --jours 7 --dossier /app/uploads/rapports_periodiques
+ExecStopPost=/bin/sh -c '[ "$SERVICE_RESULT" = success ] || /opt/ndawwune/api/scripts/surveiller_sante.sh --alerte "Rapport periodique NDAW WUNE en echec ($SERVICE_RESULT)"'

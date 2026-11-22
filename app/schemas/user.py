@@ -5,7 +5,7 @@ import re
 import uuid
 from typing import List, Optional
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import Field, BaseModel, field_validator, model_validator
 
 from app.core.identifiers import normalize_email
 
@@ -97,6 +97,15 @@ class UserUpdate(BaseModel):
     classes:   Optional[List[str]]  = None
     app_access: Optional[str]       = None
     groupe_recherche: Optional[UserGroupe] = None
+    # APP-33 : motif obligatoire pour une dérogation au protocole de recherche.
+    motif_protocole: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("app_access")
+    @classmethod
+    def _acces(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("full", "timer_only", "no_timer"):
+            raise ValueError("app_access : full, timer_only ou no_timer.")
+        return v
 
     @field_validator("phone")
     @classmethod

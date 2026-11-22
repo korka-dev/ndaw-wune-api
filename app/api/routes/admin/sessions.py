@@ -64,9 +64,9 @@ async def assign_teachers(
     session_id: uuid.UUID,
     body: TeacherAssignRequest,
     db: DB,
-    _: AdminUser,
+    user: AdminUser,
 ) -> Response:
-    await session_service.assign_teachers(db, session_id, body.teacher_ids)
+    await session_service.assign_teachers(db, session_id, body.teacher_ids, acteur=user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
