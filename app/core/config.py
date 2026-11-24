@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     SYSTEMES_SUPPORTES: str = "Android 8 ou plus récent"
     # RET13 : nombre maximal de rappels envoyés par jour au tuteur (vide = pas de plafond).
     RAPPELS_MAX_PAR_JOUR: Optional[int] = 2
+    # Lot L8 : l'inspecteur (IEF) voit-il les NOMS des élèves absents dans les
+    # rapports ? Par défaut non (seul le nombre d'absents est montré) : donnée
+    # nominative d'enfants, à ouvrir seulement sur décision explicite d'ARED.
+    INSPECTEUR_NOMS_ABSENTS: bool = False
 
     # ── Pagination ────────────────────────────────────────────────────────────
     DEFAULT_PAGE_SIZE: int = 50

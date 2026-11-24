@@ -1,6 +1,6 @@
 """Endpoints App mobile — Remarques / signalement de problèmes hors application.
 
-L'assistant de signalement de l'app (tuteurs et superviseurs) permet de
+L'assistant de signalement de l'app (tuteurs, superviseurs et inspecteurs) permet de
 remonter des problèmes qui ne relèvent pas du rapport journalier
 (ex: manque de matériel, problème de local…).
 
@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.core.deps import DB, MobileUser
+from app.core.deps import DB, UtilisateurApp
 from app.models.remarque import Remarque
 
 router = APIRouter(prefix="/remarques", tags=["App — Remarques"])
@@ -64,7 +64,7 @@ def _out(r: Remarque) -> RemarqueOut:
 
 
 @router.post("", response_model=RemarqueOut, status_code=status.HTTP_201_CREATED)
-async def create_remarque(body: RemarqueIn, current_user: MobileUser, db: DB) -> RemarqueOut:
+async def create_remarque(body: RemarqueIn, current_user: UtilisateurApp, db: DB) -> RemarqueOut:
     categorie = (body.categorie or "").strip().lower()
     if categorie not in CATEGORIES:
         raise HTTPException(
@@ -78,6 +78,8 @@ async def create_remarque(body: RemarqueIn, current_user: MobileUser, db: DB) ->
     ecole = (body.ecole or "").strip() or None
     if not ecole and current_user.school:
         ecole = current_user.school.name
+    if not ecole and current_user.ief:
+        ecole = f"IEF {current_user.ief}"  # inspecteur : rattaché à une IEF, pas à une école
 
     destinataire = (body.destinataire or "equipe_programme").strip().lower()
     if destinataire not in DESTINATAIRES:
@@ -109,7 +111,7 @@ async def create_remarque(body: RemarqueIn, current_user: MobileUser, db: DB) ->
 
 
 @router.get("", response_model=list[RemarqueOut])
-async def list_my_remarques(current_user: MobileUser, db: DB) -> list[RemarqueOut]:
+async def list_my_remarques(current_user: UtilisateurApp, db: DB) -> list[RemarqueOut]:
     rows = (await db.execute(
         select(Remarque)
         .where(Remarque.user_id == current_user.id)

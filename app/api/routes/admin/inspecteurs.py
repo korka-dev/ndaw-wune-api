@@ -70,7 +70,18 @@ async def update_inspecteur(inspecteur_id: uuid.UUID, body: UserUpdate, db: DB, 
         raise HTTPException(status_code=422, detail=f"Champs sans objet pour un inspecteur : {', '.join(sorted(interdits))}.")
     if "ief" in champs:
         body = body.model_copy(update={"ief": await ief_canonique(db, body.ief)})
-    return await user_service.update_user(db, inspecteur_id, body, current_user, _ROLES)
+    # Email et fonction s'effacent en envoyant null ou "" (le service commun
+    # ignore les valeurs nulles) ; le téléphone, identifiant de connexion, reste obligatoire.
+    if "phone" in champs and not champs["phone"]:
+        raise HTTPException(status_code=422, detail="Le téléphone est obligatoire : l'inspecteur se connecte à l'application avec.")
+    a_vider = [k for k in ("email", "title") if k in champs and not (champs[k] or "").strip()]
+    user = await user_service.update_user(db, inspecteur_id, body, current_user, _ROLES)
+    if a_vider:
+        for k in a_vider:
+            setattr(user, k, None)
+        await db.flush()
+        await db.refresh(user, attribute_names=["school"])
+    return user
 
 
 @router.delete("/{inspecteur_id}")

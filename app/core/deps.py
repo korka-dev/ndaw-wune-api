@@ -181,4 +181,19 @@ TeacherUser      = Annotated[User, Depends(require_enseignant)]
 SuperviseurUser  = Annotated[User, Depends(require_superviseur)]
 MobileUser       = Annotated[User, Depends(require_mobile_user)]
 InspecteurUser   = Annotated[User, Depends(require_inspecteur)]
+
+
+async def require_utilisateur_app(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Tous les comptes de l'application mobile, inspecteur compris (signalements, aide)."""
+    if current_user.role not in (UserRole.enseignant, UserRole.superviseur, UserRole.inspecteur):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès réservé aux utilisateurs de l'application mobile.",
+        )
+    return current_user
+
+
+UtilisateurApp   = Annotated[User, Depends(require_utilisateur_app)]
 DB               = Annotated[AsyncSession, Depends(get_db)]

@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
+from app.core.config import settings
 from app.core.deps import DB, InspecteurUser
 from app.core.pagination import Page, Pagination
 from app.models.rapport_journalier import RAPPORT_COMPTE, RapportJournalier
@@ -36,6 +37,10 @@ class ResumeIEF(BaseModel):
     rapports_7_jours: int
     besoins_appui_7_jours: int
     dernier_rapport: Optional[date] = None
+    # Réglages utiles à l'app : noms des absents visibles (INSPECTEUR_NOMS_ABSENTS)
+    # et canal d'assistance affiché dans l'aide (SUPPORT_CONTACT).
+    noms_absents_visibles: bool = False
+    support_contact: Optional[str] = None
 
 
 class EcoleIEF(BaseModel):
@@ -59,6 +64,15 @@ class PersonneEcole(BaseModel):
     classes: list[str] = []
     dernier_rapport: Optional[date] = None
     rapports_7_jours: int = 0
+
+
+def _vue(row) -> RapportJournalierListItem:
+    """Rapport tel que montré à l'inspecteur : sans les noms des absents, sauf
+    décision ARED (INSPECTEUR_NOMS_ABSENTS) ; le nombre d'absents reste visible."""
+    item = RapportJournalierListItem(**row)
+    if not settings.INSPECTEUR_NOMS_ABSENTS:
+        item.absents = None
+    return item
 
 
 def _il_y_a_7() -> date:
@@ -93,6 +107,8 @@ async def resume(current_user: InspecteurUser, db: DB) -> ResumeIEF:
         ief=current_user.ief, nb_ecoles=len(ids), nb_tuteurs=sum(tuteurs.values()),
         nb_superviseurs=sum(sups.values()), rapports_7_jours=int(recents or 0),
         besoins_appui_7_jours=int(appui or 0), dernier_rapport=dernier,
+        noms_absents_visibles=settings.INSPECTEUR_NOMS_ABSENTS,
+        support_contact=settings.SUPPORT_CONTACT or None,
     )
 
 
@@ -197,7 +213,7 @@ async def rapports(
         stmt.order_by(RapportJournalier.date_rapport.desc(), RapportJournalier.created_at.desc())
         .offset(page.skip).limit(page.limit)
     )).mappings().all()
-    return Page(total=total, skip=page.skip, limit=page.limit, items=[RapportJournalierListItem(**r) for r in rows])
+    return Page(total=total, skip=page.skip, limit=page.limit, items=[_vue(r) for r in rows])
 
 
 async def _rapport_du_perimetre(db, current_user: User, rapport_id: uuid.UUID, *colonnes):
@@ -214,7 +230,7 @@ async def _rapport_du_perimetre(db, current_user: User, rapport_id: uuid.UUID, *
 
 @router.get("/rapports/{rapport_id}", response_model=RapportJournalierListItem)
 async def rapport(rapport_id: uuid.UUID, current_user: InspecteurUser, db: DB) -> RapportJournalierListItem:
-    return RapportJournalierListItem(**await _rapport_du_perimetre(db, current_user, rapport_id, *LIST_COLUMNS))
+    return _vue(await _rapport_du_perimetre(db, current_user, rapport_id, *LIST_COLUMNS))
 
 
 @router.get("/rapports/{rapport_id}/photo/{index}")
