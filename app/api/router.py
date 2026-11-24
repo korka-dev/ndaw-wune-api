@@ -24,6 +24,7 @@ from app.api.routes.admin import (
     cles_service as admin_cles_service,
     reprise as admin_reprise,
     terrain as admin_terrain,
+    inspecteurs as admin_inspecteurs,
 )
 from app.api.routes.app import (
     sync, seances, rapports as app_rapports,
@@ -44,6 +45,7 @@ from app.api.routes.app import (
     supervisor_visites,
     supervisor_terrain,
     terrain as app_terrain,
+    inspecteur as app_inspecteur,
 )
 from app.api.routes import service as service_routes
 
@@ -94,6 +96,9 @@ for _r in (admin_visites, admin_demandes_appui, admin_campagnes, admin_tableau_b
            admin_recherche, admin_cles_service, admin_reprise, admin_terrain):
     api_router.include_router(_r.router, prefix="/admin", dependencies=_ADMIN_DEPS)
 
+# Lot L8 : comptes inspecteurs (IEF) en consultation
+api_router.include_router(admin_inspecteurs.router, prefix="/admin", dependencies=_ADMIN_DEPS)
+
 # ── Accès de service (clé d'API, lecture seule, pseudonymisé) ─────────────────
 api_router.include_router(service_routes.router)
 
@@ -119,3 +124,5 @@ api_router.include_router(supervisor_visites.router,        prefix="/app")  # /a
 # Lot L7 (retours des tuteurs et superviseurs)
 api_router.include_router(supervisor_terrain.router,        prefix="/app")  # /app/supervisor/remplacements · rapports-tuteurs · tuteurs-activite · messages
 api_router.include_router(app_terrain.router,               prefix="/app")  # /app/propositions-groupe · /app/mes-resultats
+# Lot L8 : inspecteur (IEF), consultation en lecture seule
+api_router.include_router(app_inspecteur.router,             prefix="/app")  # /app/inspecteur/resume · ecoles · rapports

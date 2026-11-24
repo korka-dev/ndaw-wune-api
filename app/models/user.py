@@ -18,6 +18,7 @@ class UserRole(str, enum.Enum):
     coordonnateur = "coordonnateur"
     enseignant    = "enseignant"
     superviseur   = "superviseur"   # rôle mobile — suivi terrain des enseignants
+    inspecteur    = "inspecteur"    # rôle mobile — consultation (lecture seule) des écoles de son IEF
 
 
 class UserStatus(str, enum.Enum):
@@ -89,6 +90,9 @@ class User(Base, UUIDMixin, TimestampMixin):
         ForeignKey("schools.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Inspecteur : IEF consultée (même libellé que `schools.region`). Le
+    # périmètre est recalculé à chaque requête depuis les écoles de cette IEF.
+    ief: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     niveau:  Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
     classes: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
 

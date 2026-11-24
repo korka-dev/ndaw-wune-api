@@ -46,6 +46,13 @@ class UserCreate(BaseModel):
     app_access: Optional[str]      = None
     # Groupe de l'étude RCT (enseignants uniquement) : "traitement" (minuteur) ou "controle" (sans)
     groupe_recherche: Optional[UserGroupe] = None
+    # Inspecteur : IEF consultée (libellé de `schools.region`).
+    ief: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("ief")
+    @classmethod
+    def _ief(cls, v: Optional[str]) -> Optional[str]:
+        return (v or "").strip() or None
 
     @field_validator("name")
     @classmethod
@@ -99,6 +106,12 @@ class UserUpdate(BaseModel):
     groupe_recherche: Optional[UserGroupe] = None
     # APP-33 : motif obligatoire pour une dérogation au protocole de recherche.
     motif_protocole: Optional[str] = Field(default=None, max_length=1000)
+    ief: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("ief")
+    @classmethod
+    def _ief(cls, v: Optional[str]) -> Optional[str]:
+        return None if v is None else (v.strip() or None)
 
     @field_validator("app_access")
     @classmethod
@@ -168,6 +181,7 @@ class UserResponse(BaseModel):
     classes:             Optional[List[str]]
     app_access:          str = "full"
     groupe_recherche:    Optional[UserGroupe] = None
+    ief:                 Optional[str] = None
     must_change_password: bool
     school:              Optional[SchoolBrief] = None
 

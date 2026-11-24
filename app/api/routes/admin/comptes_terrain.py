@@ -27,7 +27,7 @@ from app.services.archivage import non_archive
 
 router = APIRouter(prefix="/comptes-terrain", tags=["Admin — Comptes tuteurs & superviseurs"])
 
-_ROLES_TERRAIN = (UserRole.enseignant, UserRole.superviseur)
+_ROLES_TERRAIN = (UserRole.enseignant, UserRole.superviseur, UserRole.inspecteur)
 
 
 @router.get("", response_model=Page[UserResponse])
@@ -35,7 +35,7 @@ async def list_comptes_terrain(
     db: DB,
     _: AdminUser,
     page: Pagination,
-    role:   Optional[UserRole] = None,   # enseignant | superviseur — omis = les deux
+    role:   Optional[UserRole] = None,   # enseignant | superviseur | inspecteur — omis = tous
     search: Optional[str]      = None,   # nom, téléphone ou école
     archives: bool = Query(False, description="Inclure les comptes archivés"),
 ) -> Page[UserResponse]:

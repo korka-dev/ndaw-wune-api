@@ -76,6 +76,8 @@ class MeResponse(BaseModel):
     # APP-14 : durée de conservation sur le téléphone des saisies déjà envoyées (None = pas de purge).
     retention_saisies_jours: Optional[int] = None
     must_change_password: bool = False
+    # Inspecteur : IEF consultée (lot L8).
+    ief:                 Optional[str] = None
 
     model_config = {"from_attributes": True}
 

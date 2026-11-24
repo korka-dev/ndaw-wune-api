@@ -153,6 +153,18 @@ async def require_mobile_user(
     return current_user
 
 
+async def require_inspecteur(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Inspecteur (IEF) : consultation en lecture seule des écoles de son IEF."""
+    if current_user.role != UserRole.inspecteur:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès réservé aux inspecteurs.",
+        )
+    return current_user
+
+
 async def sync_invalidation_on_admin_write(request: Request, db: Annotated[AsyncSession, Depends(get_db)]) -> None:
     """Toute écriture admin (POST/PUT/PATCH/DELETE) invalide le cache de sync des
     mobiles APRÈS le commit — les listes (élèves, classes, affectations, planning…)
@@ -168,4 +180,5 @@ AdminUser        = Annotated[User, Depends(require_admin)]
 TeacherUser      = Annotated[User, Depends(require_enseignant)]
 SuperviseurUser  = Annotated[User, Depends(require_superviseur)]
 MobileUser       = Annotated[User, Depends(require_mobile_user)]
+InspecteurUser   = Annotated[User, Depends(require_inspecteur)]
 DB               = Annotated[AsyncSession, Depends(get_db)]
