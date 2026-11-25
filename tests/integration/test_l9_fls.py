@@ -116,6 +116,7 @@ async def test_import_de_la_repartition_fls(client, tag):
     d1 = await _ecole(f"Batal {t}", region=f"Diourbel {t}")           # même nom dans 2 IEF
     d2 = await _ecole(f"Batal {t}", region=f"Bambey {t}")
     await _ecole(f"Sobeme Sessene {t}")                               # proche de « SOBEME SESENE »
+    await _ecole(f"Ndioum 2 {t}")                                     # autre numéro : jamais suggérée
     ief = f"IEF Bambey {t}"
     recap = [
         ["IA Diourbel", ief, f"NDECK {t}", None],
@@ -124,6 +125,7 @@ async def test_import_de_la_repartition_fls(client, tag):
         ["IA Diourbel", ief, f"BATAL {t}", None],
         ["IA Diourbel", ief, None, f"SOBEME SESENE {t}"],
         ["IA Diourbel", ief, f"INCONNUE {t}", None],
+        ["IA Podor", "IEF Ndioum", f"NDIOUM 3 {t}", None],
     ]
     contenu = _fichier(recap, [("Bambey", recap[:2])])  # doublon recap / feuille IEF : lu une fois
     ha = bearer(await login(client, await create_user(UserRole.admin, tag)))
@@ -133,11 +135,12 @@ async def test_import_de_la_repartition_fls(client, tag):
         return client.post(url, headers=ha, params=params, files={"file": ("repartition.xlsx", contenu, XLSX)})
 
     apercu = (await envoyer({})).json()
-    assert apercu["dry_run"] is True and apercu["lignes_fichier"] == 6
+    assert apercu["dry_run"] is True and apercu["lignes_fichier"] == 7
     assert {x["nom"] for x in apercu["trouvees"]} == {a.name, b.name, c.name, d2.name}
     assert next(x for x in apercu["trouvees"] if x["nom"] == d2.name)["id"] == str(d2.id)  # départagée par l'IEF
     introuvables = {x["nom_fichier"]: x["suggestion"] for x in apercu["introuvables"]}
-    assert introuvables == {f"SOBEME SESENE {t}": f"Sobeme Sessene {t}", f"INCONNUE {t}": None}
+    assert introuvables == {f"SOBEME SESENE {t}": f"Sobeme Sessene {t}", f"INCONNUE {t}": None,
+                            f"NDIOUM 3 {t}": None}
     async with AsyncSessionLocal() as s:
         assert (await s.get(School, a.id)).fls is None  # aperçu : rien n'est modifié
 

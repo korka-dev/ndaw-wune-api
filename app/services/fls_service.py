@@ -70,6 +70,10 @@ def _sans_prefixe(cle: str) -> str:
     return cle
 
 
+def _numeros(cle: str) -> list[str]:
+    return re.findall(r"\d+", cle)
+
+
 @dataclass
 class LigneFls:
     ia: Optional[str]
@@ -151,7 +155,9 @@ async def rapprocher(db: AsyncSession, lignes: list[LigneFls]) -> dict:
             candidats = meme_ief or candidats
         base = {"nom_fichier": ligne.nom, "ief_fichier": ligne.ief, "fls": ligne.fls}
         if not candidats:
-            proches = difflib.get_close_matches(cle, noms_connus, n=1, cutoff=0.8)
+            # Jamais une école d'un autre numéro (« NDIOUM 3 » n'est pas « NDIOUM 2 »).
+            proches = [p for p in difflib.get_close_matches(cle, noms_connus, n=5, cutoff=0.8)
+                       if _numeros(p) == _numeros(cle)]
             suggestion = par_nom[proches[0]][0].name if proches else None
             introuvables.append({**base, "suggestion": suggestion})
             continue
