@@ -15,7 +15,12 @@ from app.core.deps import AdminUser, DB
 from app.core.pagination import Page, Pagination
 from app.core.redis import invalidate_sync_caches as _invalidate_sync_caches
 from app.models.planning import PlanningSegment
+from app.models.school import School
 from app.models.session import ProgramSession
+from app.services.audit_service import journaliser
+from app.services.fls_service import (
+    ecoles_sans_type, est_creneau_fls, filtre_type_ecole, lire_repartition, rapprocher, resume_public,
+)
 from app.models.user import User
 from app.schemas.planning import (
     PlanningSegmentCreate, PlanningSegmentUpdate,
@@ -255,6 +260,7 @@ def _enrich(seg: PlanningSegment, teacher_name: str | None = None) -> PlanningSe
         heure_fin=seg.heure_fin,
         classe=seg.classe,
         matiere=seg.matiere,
+        reserve_fls=bool(seg.reserve_fls),
         teacher_name=teacher_name,
     )
 
@@ -266,6 +272,7 @@ async def list_planning(
     page: Pagination,
     session_id: uuid.UUID | None = None,
     semaine: int | None = None,
+    type_ecole: str | None = Query(None, description="Aperçu : tous | fls | sans_fls (lot L9)"),
 ) -> Page[PlanningSegmentResponse]:
     base = (
         select(PlanningSegment, User.name)
@@ -279,6 +286,10 @@ async def list_planning(
     if semaine is not None:
         base    = base.where(PlanningSegment.semaine == semaine)
         count_q = count_q.where(PlanningSegment.semaine == semaine)
+    visibilite = filtre_type_ecole(type_ecole)
+    if visibilite is not None:
+        base    = base.where(visibilite)
+        count_q = count_q.where(visibilite)
 
     total = (await db.execute(
         select(func.count()).select_from(count_q.subquery())
@@ -337,7 +348,10 @@ async def export_planning_csv(
 
 @router.post("", response_model=PlanningSegmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_segment(body: PlanningSegmentCreate, db: DB, _: AdminUser):
-    seg = PlanningSegment(**body.model_dump())
+    data = body.model_dump()
+    if data.get("reserve_fls") is None:
+        data["reserve_fls"] = est_creneau_fls(data.get("matiere"))
+    seg = PlanningSegment(**data)
     db.add(seg)
     await db.commit()
     await db.refresh(seg)
@@ -353,7 +367,10 @@ async def update_segment(seg_id: uuid.UUID, body: PlanningSegmentUpdate, db: DB,
     if not seg:
         raise HTTPException(status_code=404, detail="Créneau introuvable.")
     # exclude_unset (et non exclude_none) : permet d'effacer la semaine en envoyant null
-    for field, value in body.model_dump(exclude_unset=True).items():
+    champs = body.model_dump(exclude_unset=True)
+    if champs.get("reserve_fls") is None:
+        champs.pop("reserve_fls", None)
+    for field, value in champs.items():
         setattr(seg, field, value)
     await db.commit()
     await db.refresh(seg)
@@ -406,6 +423,11 @@ async def import_planning(
     content  = await read_upload_capped(file)
     filename = (file.filename or "").lower()
     ctype    = (file.content_type or "").lower()
+    if _est_repartition_fls(content, filename):
+        raise HTTPException(status_code=422, detail={
+            "code": "FICHIER_REPARTITION_FLS",
+            "message": "Ce fichier est la répartition des écoles avec / sans FLS : utilisez « Importer la répartition FLS ».",
+        })
 
     is_pdf = filename.endswith(".pdf") or "pdf" in ctype
     is_excel = filename.endswith(".xlsx") or filename.endswith(".xls") or "excel" in ctype or "officedocument.spreadsheetml" in ctype
@@ -482,7 +504,8 @@ async def import_planning(
 
     imported = 0
     for seg_data in valides:
-        db.add(PlanningSegment(session_id=session_id, semaine=semaine, **seg_data))
+        db.add(PlanningSegment(session_id=session_id, semaine=semaine,
+                               reserve_fls=est_creneau_fls(seg_data.get("matiere")), **seg_data))
         imported += 1
 
     try:
@@ -497,3 +520,88 @@ async def import_planning(
         )
 
     return {"imported": imported, "replaced": remplaces, "errors": errors, "perimetre": apercu["perimetre"]}
+
+
+# ── Lot L9 : écoles avec / sans FLS ───────────────────────────────────────────
+
+def _est_repartition_fls(content: bytes, filename: str) -> bool:
+    """Vrai si le fichier est la répartition FLS (et non un emploi du temps)."""
+    if not filename.endswith(".xlsx"):
+        return False
+    try:
+        lire_repartition(content)
+        return True
+    except HTTPException:
+        return False
+    except Exception:
+        return False
+
+
+@router.get("/fls/resume")
+async def resume_fls(db: DB, _: AdminUser, session_id: uuid.UUID | None = None) -> dict:
+    """Combien d'écoles avec, sans FLS ou non renseignées ; créneaux réservés FLS."""
+    lignes = (await db.execute(
+        select(School.fls, func.count()).where(School.archived_at.is_(None)).group_by(School.fls)
+    )).all()
+    compte = {fls: int(n) for fls, n in lignes}
+    q = select(func.count()).select_from(PlanningSegment).where(PlanningSegment.reserve_fls.is_(True))
+    if session_id:
+        q = q.where(PlanningSegment.session_id == session_id)
+    return {
+        "avec_fls": compte.get(True, 0), "sans_fls": compte.get(False, 0), "non_renseignees": compte.get(None, 0),
+        "creneaux_reserves_fls": (await db.execute(q)).scalar_one(),
+    }
+
+
+@router.post("/import-fls")
+async def import_repartition_fls(
+    db: DB,
+    current_user: AdminUser,
+    dry_run: bool = Query(True, description="Aperçu : rien n'est modifié (défaut)."),
+    completer_ief: bool = Query(False, description="Renseigner l'IEF du fichier pour les écoles qui n'en ont pas."),
+    file: UploadFile = File(...),
+) -> dict:
+    """Importe la répartition des écoles avec / sans FLS (fichier Excel de l'équipe programme).
+
+    Chaque école du fichier est rapprochée par son nom (accents, casse,
+    ponctuation et préfixes EE / EFA ignorés ; IEF pour départager). Seules les
+    écoles trouvées sans ambiguïté sont mises à jour ; les autres sont listées,
+    avec une suggestion de nom proche. Les créneaux réservés FLS sont alors
+    masqués aux tuteurs des écoles sans FLS dès leur prochaine synchronisation.
+    """
+    content = await read_upload_capped(file)
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(status_code=415, detail="Fichier Excel (.xlsx) attendu.")
+    lignes, erreurs = lire_repartition(content)
+    r = await rapprocher(db, lignes)
+    a_changer = [t for t in r["trouvees"] if t["change"]]
+    a_completer = [t for t in r["trouvees"] if completer_ief and t["ief_manquante"] and t["ief_fichier"]]
+    rapport = {
+        "dry_run": dry_run,
+        "lignes_fichier": len(lignes),
+        "avec_fls": sum(1 for x in lignes if x.fls),
+        "sans_fls": sum(1 for x in lignes if not x.fls),
+        "a_modifier": len(a_changer),
+        "ief_completees": len(a_completer),
+        "erreurs": erreurs,
+        **resume_public(r),
+    }
+    if dry_run:
+        return rapport
+
+    for t in a_changer:
+        t["ecole"].fls = t["fls"]
+    for t in a_completer:
+        t["ecole"].region = t["ief_fichier"]
+    journaliser(
+        db, acteur=current_user, action="import", entity="Écoles", method="POST",
+        path="/api/v1/admin/planning/import-fls",
+        description=(f"Répartition FLS importée : {len(a_changer)} école(s) mise(s) à jour, "
+                     f"{len(a_completer)} IEF complétée(s), {len(r['introuvables'])} introuvable(s), "
+                     f"{len(r['ambigues'])} ambiguë(s)"),
+        cible_type="schools",
+    )
+    await db.commit()
+    await _invalidate_sync_caches()
+    rapport["ecoles_sans_type_restantes"] = await ecoles_sans_type(db)
+    return rapport

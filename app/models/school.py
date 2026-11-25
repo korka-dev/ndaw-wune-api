@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.base import UUIDMixin, TimestampMixin
@@ -23,6 +23,10 @@ class School(Base, UUIDMixin, TimestampMixin):
     director:        Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     director_phone:  Mapped[Optional[str]] = mapped_column(String(30),  nullable=True)
     langue:          Mapped[Optional[str]] = mapped_column(String(50),  nullable=True)  # langue nationale d'enseignement (ex: pulaar)
+    # Français langue seconde (lot L9) : True = école avec FLS, False = sans FLS
+    # (les créneaux réservés FLS sont masqués à ses tuteurs), NULL = non renseigné
+    # (tout l'emploi du temps reste visible, comportement antérieur).
+    fls:             Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     # ── Relations ─────────────────────────────────────────────────
     teachers: Mapped[List["User"]] = relationship("User", back_populates="school")

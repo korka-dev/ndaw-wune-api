@@ -13,6 +13,7 @@ from app.models.document import Document
 from app.models.eleve import Eleve
 from app.models.evaluation_eleve import EvaluationEleve
 from app.models.planning import PlanningSegment
+from app.services.fls_service import condition_visibilite
 from app.models.rapport_difficulte import RapportDifficulte
 from app.models.rapport_libelle import RapportLibelle
 from app.models.rapport_question import RapportQuestion
@@ -95,19 +96,22 @@ async def build_sync_payload(db: AsyncSession, user: User) -> SyncPayload:
 
         # ── Planning ──────────────────────────────────────────────────────────
         # Inclut : segments assignés au prof OU segments partagés (teacher_id NULL)
-        segments = (
-            await db.execute(
-                select(PlanningSegment)
-                .where(
-                    PlanningSegment.session_id == active.id,
-                    or_(
-                        PlanningSegment.teacher_id == user.id,
-                        PlanningSegment.teacher_id.is_(None),
-                    ),
-                )
-                .order_by(PlanningSegment.jour, PlanningSegment.heure_debut)
+        q_planning = (
+            select(PlanningSegment)
+            .where(
+                PlanningSegment.session_id == active.id,
+                or_(
+                    PlanningSegment.teacher_id == user.id,
+                    PlanningSegment.teacher_id.is_(None),
+                ),
             )
-        ).scalars().all()
+            .order_by(PlanningSegment.jour, PlanningSegment.heure_debut)
+        )
+        # Lot L9 : école sans FLS → créneaux réservés FLS masqués.
+        visibilite = condition_visibilite(user.school)
+        if visibilite is not None:
+            q_planning = q_planning.where(visibilite)
+        segments = (await db.execute(q_planning)).scalars().all()
 
         planning_items = [SyncPlanningSegment.model_validate(s) for s in segments]
 

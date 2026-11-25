@@ -14,6 +14,8 @@ class PlanningSegmentCreate(BaseModel):
     heure_fin:   time
     matiere:     Optional[str] = None
     classe:      Optional[str] = None
+    # Lot L9 : None = déduit de la matière (« Français langue seconde », « FLS »).
+    reserve_fls: Optional[bool] = None
 
     @field_validator("jour")
     @classmethod
@@ -37,6 +39,7 @@ class PlanningSegmentUpdate(BaseModel):
     matiere:     Optional[str]  = None
     school_id:   Optional[uuid.UUID] = None
     classe:      Optional[str]  = None
+    reserve_fls: Optional[bool] = None
 
 
 class PlanningSegmentResponse(BaseModel):
@@ -50,6 +53,7 @@ class PlanningSegmentResponse(BaseModel):
     heure_fin:   time
     matiere:     Optional[str] = None
     classe:      Optional[str] = None
+    reserve_fls: bool = False
     teacher_name: Optional[str] = None
 
     model_config = {"from_attributes": True}

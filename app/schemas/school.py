@@ -11,6 +11,7 @@ class SchoolCreate(BaseModel):
     director:       Optional[str] = None
     director_phone: Optional[str] = None
     langue:         Optional[str] = None
+    fls:            Optional[bool] = None  # lot L9 : None = non renseigné
 
     @field_validator("name")
     @classmethod
@@ -27,6 +28,7 @@ class SchoolUpdate(BaseModel):
     director:       Optional[str] = None
     director_phone: Optional[str] = None
     langue:         Optional[str] = None
+    fls:            Optional[bool] = None
 
 
 class SchoolResponse(BaseModel):
@@ -37,6 +39,7 @@ class SchoolResponse(BaseModel):
     director:       Optional[str]
     director_phone: Optional[str] = None
     langue:         Optional[str] = None
+    fls:            Optional[bool] = None
 
     archived_at: Optional[datetime] = None  # APP-15
     model_config = {"from_attributes": True}

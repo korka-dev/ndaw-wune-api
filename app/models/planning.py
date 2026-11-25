@@ -1,7 +1,7 @@
 import uuid
 from datetime import time
 from typing import Optional
-from sqlalchemy import String, Integer, Time, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, String, Integer, Time, ForeignKey, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.database import Base
@@ -39,6 +39,9 @@ class PlanningSegment(Base, UUIDMixin, TimestampMixin):
     heure_fin:   Mapped[time]           = mapped_column(Time, nullable=False)
     classe:      Mapped[Optional[str]]  = mapped_column(String(50), nullable=True)
     matiere:     Mapped[Optional[str]]  = mapped_column(String(100), nullable=True)
+    # Lot L9 : créneau réservé aux écoles avec FLS (français langue seconde),
+    # masqué aux tuteurs des écoles sans FLS.
+    reserve_fls: Mapped[bool]           = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
     __table_args__ = (
         UniqueConstraint("session_id", "semaine", "jour", "heure_debut", name="uq_planning_segment"),

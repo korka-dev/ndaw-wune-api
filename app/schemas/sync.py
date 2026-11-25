@@ -36,6 +36,7 @@ class SyncSchool(BaseModel):
     director:       Optional[str]
     director_phone: Optional[str] = None
     langue:         Optional[str] = None
+    fls:            Optional[bool] = None  # lot L9
 
     model_config = {"from_attributes": True}
 
@@ -60,6 +61,7 @@ class SyncPlanningSegment(BaseModel):
     classe:      Optional[str] = None
     matiere:     Optional[str] = None
     titre:       Optional[str] = None   # dérivé : matiere ?? classe
+    reserve_fls: bool = False           # lot L9 (informatif : déjà filtré par le serveur)
 
     model_config = {"from_attributes": True}
 
