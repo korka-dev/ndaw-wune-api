@@ -1,10 +1,11 @@
 import csv
 import io
+import json
 import logging
 import re
 import uuid
 from datetime import datetime as _dt
-from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, delete, func, select, true
 
@@ -560,6 +561,7 @@ async def import_repartition_fls(
     dry_run: bool = Query(True, description="Aperçu : rien n'est modifié (défaut)."),
     completer_ief: bool = Query(False, description="Renseigner l'IEF du fichier pour les écoles qui n'en ont pas."),
     file: UploadFile = File(...),
+    associations: str | None = Form(None, description='Choix de l\'admin, JSON {"nom dans le fichier": "id école"}'),
 ) -> dict:
     """Importe la répartition des écoles avec / sans FLS (fichier Excel de l'équipe programme).
 
@@ -572,8 +574,17 @@ async def import_repartition_fls(
     content = await read_upload_capped(file)
     if not (file.filename or "").lower().endswith(".xlsx"):
         raise HTTPException(status_code=415, detail="Fichier Excel (.xlsx) attendu.")
+    choix: dict[str, str] = {}
+    if associations:
+        try:
+            choix = json.loads(associations)
+            assert isinstance(choix, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in choix.items())
+            for v in choix.values():
+                uuid.UUID(v)
+        except Exception:
+            raise HTTPException(status_code=422, detail="associations : objet JSON {nom dans le fichier: id d'école} attendu.")
     lignes, erreurs = lire_repartition(content)
-    r = await rapprocher(db, lignes)
+    r = await rapprocher(db, lignes, choix)
     a_changer = [t for t in r["trouvees"] if t["change"]]
     a_completer = [t for t in r["trouvees"] if completer_ief and t["ief_manquante"] and t["ief_fichier"]]
     rapport = {
@@ -582,6 +593,7 @@ async def import_repartition_fls(
         "avec_fls": sum(1 for x in lignes if x.fls),
         "sans_fls": sum(1 for x in lignes if not x.fls),
         "a_modifier": len(a_changer),
+        "associations_appliquees": sum(1 for t in r["trouvees"] if t.get("associee")),
         "ief_completees": len(a_completer),
         "erreurs": erreurs,
         **resume_public(r),

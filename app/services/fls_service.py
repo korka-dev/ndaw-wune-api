@@ -52,6 +52,8 @@ def cle_nom(nom: Optional[str]) -> str:
     """Nom comparable : sans accents, casse, ponctuation ni espaces multiples."""
     t = _sans_accents(str(nom or "")).upper()
     t = re.sub(r"[^A-Z0-9]+", " ", t)
+    # « SERERE2 » et « SERERE 2 », « 1ER » et « 1 ER » se comparent pareil.
+    t = re.sub(r"(?<=[A-Z])(?=\d)|(?<=\d)(?=[A-Z])", " ", t)
     return " ".join(t.split())
 
 
@@ -60,7 +62,8 @@ def cle_ief(ief: Optional[str]) -> str:
     return re.sub(r"^IEF ", "", cle_nom(ief))
 
 
-_PREFIXES = ("EE ", "EFA ", "ECOLE ")
+# Préfixes d'établissement ignorés pour le rapprochement (« EE NDECK » = « NDECK »).
+_PREFIXES = ("ECOLE ELEMENTAIRE ", "ECOLE ", "E E ", "EE ", "EFA ", "EP ")
 
 
 def _sans_prefixe(cle: str) -> str:
@@ -134,32 +137,46 @@ def lire_repartition(content: bytes) -> tuple[list[LigneFls], list[dict]]:
     return [e for e in ecoles.values() if e.fls is not None], erreurs
 
 
-async def rapprocher(db: AsyncSession, lignes: list[LigneFls]) -> dict:
-    """Associe chaque ligne du fichier à une école de la base (sans rien modifier)."""
+async def rapprocher(db: AsyncSession, lignes: list[LigneFls],
+                     associations: Optional[dict[str, str]] = None) -> dict:
+    """Associe chaque ligne du fichier à une école de la base (sans rien modifier).
+
+    `associations` : choix explicites de l'admin, {nom dans le fichier: id
+    d'école}, pour une école introuvable (suggestion acceptée) ou ambiguë.
+    """
     ecoles = (await db.execute(select(School).where(School.archived_at.is_(None)))).scalars().all()
+    par_id = {str(s.id): s for s in ecoles}
     par_nom: dict[str, list[School]] = {}
     par_nom_court: dict[str, list[School]] = {}
     for s in ecoles:
         par_nom.setdefault(cle_nom(s.name), []).append(s)
         par_nom_court.setdefault(_sans_prefixe(cle_nom(s.name)), []).append(s)
-    noms_connus = list(par_nom)
+    choix = {cle_nom(k): v for k, v in (associations or {}).items()}
 
     trouvees, introuvables, ambigues = [], [], []
     vues: dict = {}
     for ligne in lignes:
         cle = cle_nom(ligne.nom)
-        candidats = par_nom.get(cle) or par_nom_court.get(_sans_prefixe(cle)) or []
+        base = {"nom_fichier": ligne.nom, "ief_fichier": ligne.ief, "fls": ligne.fls}
+        associee = False
+        if cle in choix:
+            ecole = par_id.get(str(choix[cle]))
+            if ecole is None:
+                introuvables.append({**base, "suggestion": None, "suggestion_id": None,
+                                     "raison": "école choisie introuvable ou archivée"})
+                continue
+            candidats, associee = [ecole], True
+        else:
+            candidats = par_nom.get(cle) or par_nom_court.get(_sans_prefixe(cle)) or []
         if len(candidats) > 1:
             # Départage par l'IEF quand l'école porte son IEF.
             meme_ief = [s for s in candidats if s.region and cle_ief(s.region) == cle_ief(ligne.ief)]
             candidats = meme_ief or candidats
-        base = {"nom_fichier": ligne.nom, "ief_fichier": ligne.ief, "fls": ligne.fls}
         if not candidats:
-            # Jamais une école d'un autre numéro (« NDIOUM 3 » n'est pas « NDIOUM 2 »).
-            proches = [p for p in difflib.get_close_matches(cle, noms_connus, n=5, cutoff=0.8)
-                       if _numeros(p) == _numeros(cle)]
-            suggestion = par_nom[proches[0]][0].name if proches else None
-            introuvables.append({**base, "suggestion": suggestion})
+            sugg = _suggestion(ligne, ecoles)
+            introuvables.append({**base, "suggestion": sugg.name if sugg else None,
+                                 "suggestion_id": str(sugg.id) if sugg else None,
+                                 "suggestion_ief": sugg.region if sugg else None})
             continue
         if len(candidats) > 1:
             ambigues.append({**base, "ecoles": [{"id": str(s.id), "nom": s.name, "ief": s.region} for s in candidats]})
@@ -171,12 +188,31 @@ async def rapprocher(db: AsyncSession, lignes: list[LigneFls]) -> dict:
             continue
         vues[s.id] = ligne.nom
         trouvees.append({
-            **base, "ecole": s, "id": str(s.id), "nom": s.name, "ief": s.region,
+            **base, "ecole": s, "id": str(s.id), "nom": s.name, "ief": s.region, "associee": associee,
             "fls_actuel": s.fls, "change": s.fls is not ligne.fls,
             "ief_differente": bool(s.region) and cle_ief(s.region) != cle_ief(ligne.ief),
             "ief_manquante": not (s.region or "").strip(),
         })
     return {"trouvees": trouvees, "introuvables": introuvables, "ambigues": ambigues}
+
+
+def _suggestion(ligne: LigneFls, ecoles) -> Optional[School]:
+    """École au nom proche, à proposer (jamais appliquée sans accord de l'admin).
+
+    Cherchée d'abord dans la même IEF, sans les préfixes EE / EFA ; jamais une
+    école d'un autre numéro (« NDIOUM 3 » n'est pas « NDIOUM 2 »).
+    """
+    cle = _sans_prefixe(cle_nom(ligne.nom))
+    meme_ief = [s for s in ecoles if s.region and cle_ief(s.region) == cle_ief(ligne.ief)]
+    for groupe, seuil in ((meme_ief, 0.82), (ecoles, 0.88)):
+        noms: dict[str, School] = {}
+        for s in groupe:
+            noms.setdefault(_sans_prefixe(cle_nom(s.name)), s)
+        proches = [p for p in difflib.get_close_matches(cle, list(noms), n=5, cutoff=seuil)
+                   if _numeros(p) == _numeros(cle)]
+        if proches:
+            return noms[proches[0]]
+    return None
 
 
 def resume_public(r: dict) -> dict:

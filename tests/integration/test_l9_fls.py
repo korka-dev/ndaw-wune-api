@@ -118,13 +118,15 @@ async def test_import_de_la_repartition_fls(client, tag):
     await _ecole(f"Sobeme Sessene {t}")                               # proche de « SOBEME SESENE »
     await _ecole(f"Ndioum 2 {t}")                                     # autre numéro : jamais suggérée
     ief = f"IEF Bambey {t}"
+    # Nom sans rien de commun avec les autres (le suffixe aléatoire partagé rapprocherait les noms).
+    inconnue = "QWXZ " + "".join(chr(65 + int(c, 16) % 26) for c in uuid.uuid4().hex[:10])
     recap = [
         ["IA Diourbel", ief, f"NDECK {t}", None],
         ["IA Diourbel", ief, None, f"EE NGOYE {t}"],
         ["IA Diourbel", ief, f"BAMBEY SERERE 3 {t}", None],
         ["IA Diourbel", ief, f"BATAL {t}", None],
         ["IA Diourbel", ief, None, f"SOBEME SESENE {t}"],
-        ["IA Diourbel", ief, f"INCONNUE {t}", None],
+        ["IA Diourbel", ief, inconnue, None],
         ["IA Podor", "IEF Ndioum", f"NDIOUM 3 {t}", None],
     ]
     contenu = _fichier(recap, [("Bambey", recap[:2])])  # doublon recap / feuille IEF : lu une fois
@@ -139,7 +141,7 @@ async def test_import_de_la_repartition_fls(client, tag):
     assert {x["nom"] for x in apercu["trouvees"]} == {a.name, b.name, c.name, d2.name}
     assert next(x for x in apercu["trouvees"] if x["nom"] == d2.name)["id"] == str(d2.id)  # départagée par l'IEF
     introuvables = {x["nom_fichier"]: x["suggestion"] for x in apercu["introuvables"]}
-    assert introuvables == {f"SOBEME SESENE {t}": f"Sobeme Sessene {t}", f"INCONNUE {t}": None,
+    assert introuvables == {f"SOBEME SESENE {t}": f"Sobeme Sessene {t}", inconnue: None,
                             f"NDIOUM 3 {t}": None}
     async with AsyncSessionLocal() as s:
         assert (await s.get(School, a.id)).fls is None  # aperçu : rien n'est modifié
@@ -158,6 +160,39 @@ async def test_import_de_la_repartition_fls(client, tag):
 
     resume = (await client.get(f"{API}/admin/planning/fls/resume", headers=ha)).json()
     assert resume["avec_fls"] >= 3 and resume["sans_fls"] >= 1
+
+
+async def test_ecritures_collees_suggestions_par_ief_et_choix_de_l_admin(client, tag):
+    t = tag.upper()
+    ief = f"IEF Bambey {t}"
+    colle = await _ecole(f"EE BAMBEY SERERE2 {t}", region=ief)       # chiffre collé, préfixe EE
+    battal = await _ecole(f"EFA BATTAL {t}", region=ief)
+    batal_ailleurs = await _ecole(f"BATALE {t}", region=f"IEF Autre {t}")
+    recap = [["IA Diourbel", ief, None, f"BAMBEY SERERE 2 {t}"],
+             ["IA Diourbel", ief, f"BATAL {t}", None]]
+    contenu = _fichier(recap)
+    ha = bearer(await login(client, await create_user(UserRole.admin, tag)))
+    url = f"{API}/admin/planning/import-fls"
+
+    async def envoyer(params, data=None):
+        return (await client.post(url, headers=ha, params=params, data=data or {},
+                                  files={"file": ("r.xlsx", contenu, XLSX)})).json()
+
+    apercu = await envoyer({})
+    assert [x["id"] for x in apercu["trouvees"]] == [str(colle.id)]  # chiffre collé reconnu
+    (intro,) = apercu["introuvables"]
+    # Suggestion prise dans la même IEF, préfixe EFA ignoré ; l'école d'une autre IEF n'est pas proposée.
+    assert (intro["suggestion_id"], intro["suggestion"]) == (str(battal.id), battal.name)
+    assert intro["suggestion_id"] != str(batal_ailleurs.id)
+
+    import json as _json
+    r = await envoyer({"dry_run": "false"}, {"associations": _json.dumps({f"BATAL {t}": str(battal.id)})})
+    assert r["introuvables"] == [] and r["associations_appliquees"] == 1 and r["a_modifier"] == 2
+    assert await _fls(battal.id) is True and await _fls(colle.id) is False
+
+    r = await client.post(url, headers=ha, data={"associations": "pas du json"},
+                          files={"file": ("r.xlsx", contenu, XLSX)})
+    assert r.status_code == 422
 
 
 async def _fls(ecole_id):
