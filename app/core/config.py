@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # ── Application ───────────────────────────────────────────────────────────
-    APP_NAME: str = "ARED-NdawWune"
+    APP_NAME: str = "NdawWune"
     APP_ENV: Literal["development", "production", "test"] = "development"
 
     # ── Stockage des fichiers uploadés ────────────────────────────────────────
