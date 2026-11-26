@@ -7,9 +7,10 @@ portées par les écoles (`schools.region`).
 """
 from __future__ import annotations
 
+import json
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +20,9 @@ from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.services import user_service
 from app.services.archivage import non_archive
+from app.core.upload_utils import read_upload_capped
+from app.services import points_focaux_service
+from app.services.audit_service import journaliser
 from app.services.inspecteur_service import ief_canonique, liste_iefs
 
 router = APIRouter(prefix="/inspecteurs", tags=["Admin — Inspecteurs"])
@@ -55,6 +59,35 @@ async def create_inspecteur(body: UserCreate, db: DB, _: AdminUser) -> UserRespo
         "groupe_recherche": None, "app_access": "full",
     })
     return await user_service.create_user(db, body, force_role=UserRole.inspecteur)
+
+
+@router.post("/import-points-focaux")
+async def importer_points_focaux(
+    db: DB,
+    admin: AdminUser,
+    file: UploadFile = File(...),
+    dry_run: bool = Query(True, description="Aperçu : rien n'est enregistré."),
+    rattachements: str = Form("{}", description='JSON {"PF-007": "IEF …"} : IEF choisie pour un point focal sans IEF.'),
+    exclus: str = Form("[]", description='JSON ["PF-010"] : points focaux laissés de côté.'),
+) -> dict:
+    """Lot L10 : crée les comptes inspecteurs depuis l'onglet « Points_focaux »
+    de la base de l'année (le même fichier que l'import global)."""
+    try:
+        choix = json.loads(rattachements or "{}")
+        ecartes = json.loads(exclus or "[]")
+        assert isinstance(choix, dict) and isinstance(ecartes, list)
+    except (ValueError, AssertionError):
+        raise HTTPException(status_code=422, detail="rattachements / exclus : JSON invalide.")
+    points = points_focaux_service.lire(await read_upload_capped(file))
+    r = await points_focaux_service.traiter(db, points, {str(k): str(v) for k, v in choix.items() if v},
+                                            {str(e) for e in ecartes})
+    if dry_run:
+        await db.rollback()
+    elif r["crees"] or r["mis_a_jour"]:
+        journaliser(db, acteur=admin, action="create", entity="Inspecteur", path="/admin/inspecteurs/import-points-focaux",
+                    description=f"Import des points focaux : {len(r['crees'])} compte(s) inspecteur créé(s), "
+                                f"{len(r['mis_a_jour'])} mis à jour.")
+    return {"dry_run": dry_run, "lignes": len(points), **r}
 
 
 @router.get("/{inspecteur_id}", response_model=UserResponse)
