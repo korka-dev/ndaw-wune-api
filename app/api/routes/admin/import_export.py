@@ -34,15 +34,18 @@ possible). Rien n'est jamais supprimé.
 """
 from __future__ import annotations
 
+import asyncio
 import io
+import logging
 import secrets
+import time
 import unicodedata
 import uuid as uuid_module
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import openpyxl
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl.styles import Font
 from pydantic import BaseModel
@@ -58,7 +61,8 @@ from app.core.security import hash_password
 from app.models.eleve import Eleve
 from app.models.school import School
 from app.models.school_classe import SchoolClasse
-from app.core.redis import invalidate_sync_caches_after_commit
+from app.core.database import AsyncSessionLocal
+from app.core.redis import get_redis, invalidate_sync_caches, invalidate_sync_caches_after_commit
 from app.models.user import User, UserRole, UserStatus
 from app.schemas.user import _normalize_sn_phone
 from app.services.audit_service import journaliser
@@ -285,11 +289,34 @@ async def import_all(
       cellule vide ne remplace jamais une valeur connue ;
     - la colonne optionnelle « FLS » (Oui / Non) renseigne l'école avec / sans FLS.
     """
-    content = await read_upload_capped(file)
+    rows = await asyncio.to_thread(_lire_lignes, await read_upload_capped(file))
+    return await executer_import(db, admin, rows, dry_run, nouvelle_annee)
+
+
+def _lire_lignes(content: bytes) -> list[tuple]:
+    """Lignes du premier onglet (« Base_application » dans la base 2026-2027)."""
     wb = load_workbook_safe(content)
-    ws = wb.worksheets[0]  # premier onglet (« Base_application » dans la base 2026-2027)
-    rows = list(iter_rows_capped(ws))
-    wb.close()
+    try:
+        return list(iter_rows_capped(wb.worksheets[0]))
+    finally:
+        wb.close()
+
+
+Progression = Optional[Callable[[str, int, int], Awaitable[None]]]
+
+
+async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nouvelle_annee: bool,
+                          progression: Progression = None) -> ImportSummary:
+    """Traitement de l'import (requête directe ou tâche de fond).
+
+    `progression(phase, traitees, total)` est appelée régulièrement pour la
+    barre de progression de l'admin. En aperçu (`dry_run`), tout est annulé ;
+    sinon l'appelant valide la transaction.
+    """
+    async def avancer(phase: str, traitees: int, total: int) -> None:
+        if progression is not None:
+            await progression(phase, traitees, total)
+
     if not rows:
         return ImportSummary(dry_run=dry_run, nouvelle_annee=nouvelle_annee, erreurs=["Fichier vide."])
 
@@ -531,7 +558,11 @@ async def import_all(
                 school_by_director_phone[tel_dir] = school
         return change
 
+    total = len(rows) - 1
+    await avancer("lignes", 0, total)
     for line_num, row in enumerate(rows[1:], start=2):
+        if (line_num - 2) % 100 == 0 and line_num > 2:
+            await avancer("lignes", line_num - 2, total)
         if all(v is None or str(v).strip() == "" for v in row):
             continue
         summary.lignes_lues += 1
@@ -756,9 +787,11 @@ async def import_all(
             setattr(summary, k, getattr(summary, k) + v)
 
     if nouvelle_annee and summary.lignes_validees:
+        await avancer("archivage", total, total)
         await _archiver_hors_fichier(db, summary, admin, eleves_vus, codes_fichier, comptes_vus, tels_fichier)
 
     if eleves_vus:
+        await avancer("controles", total, total)
         summary.avertissements += await _eleves_sans_tuteur(db, eleves_vus)
 
     if len(summary.erreurs) > 50:
@@ -822,3 +855,113 @@ async def _eleves_sans_tuteur(db, eleves_vus: set) -> list[str]:
     """), {"ids": list(eleves_vus)})).all()
     return [f"{r.ecole} — {r.classe} : {r.n} élève(s) sans tuteur, invisibles dans l'app tant "
             f"qu'un tuteur n'y est pas affecté." for r in rows]
+
+
+# ── Import en tâche de fond (lot L10) ────────────────────────────────────────
+# Une base complète (5 000 élèves) prend plus d'une minute : le proxy (Caddy,
+# read_timeout 60 s) coupait la requête et le navigateur affichait « Serveur
+# injoignable ». L'admin lance donc l'import ici, reçoit aussitôt un
+# identifiant, puis interroge l'avancement (barre de progression). L'état vit
+# dans Redis pour que n'importe quel worker puisse répondre. Tout l'import est
+# une seule transaction : interrompu, il n'enregistre rien.
+
+logger = logging.getLogger(__name__)
+
+_CLE_TACHE = "import_global:tache:{}"
+_VERROU = "import_global:en_cours"
+_DUREE_ETAT = 24 * 3600   # l'état reste consultable 24 h
+_DUREE_VERROU = 180       # rafraîchi à chaque étape ; libéré si le worker meurt
+_SILENCE_MAX = 120        # sans nouvelle depuis 2 min : tâche considérée interrompue
+_TACHES: set[asyncio.Task] = set()  # référence forte : une tâche non référencée peut être collectée
+
+
+class TacheImport(BaseModel):
+    id: str
+    statut: str                      # en_cours | termine | erreur | interrompu
+    phase: str = "lecture"           # lecture | lignes | archivage | controles | enregistrement
+    traitees: int = 0
+    total: int = 0
+    dry_run: bool = True
+    nouvelle_annee: bool = False
+    debut: float = 0
+    maj: float = 0
+    resultat: Optional[ImportSummary] = None
+    erreur: Optional[str] = None
+
+
+@router.post("/import/taches", response_model=TacheImport, status_code=202)
+async def lancer_import(
+    admin: AdminUser,
+    file: UploadFile = File(...),
+    dry_run: bool = Query(False),
+    nouvelle_annee: bool = Query(False),
+) -> TacheImport:
+    """Lance l'import en arrière-plan ; suivre avec GET /import/taches/{id}.
+
+    Un seul import à la fois : deux imports simultanés se marcheraient dessus
+    (mêmes comptes, mêmes élèves)."""
+    rows = await asyncio.to_thread(_lire_lignes, await read_upload_capped(file))
+    r = await get_redis()
+    tid = uuid_module.uuid4().hex
+    if not await r.set(_VERROU, tid, nx=True, ex=_DUREE_VERROU):
+        raise HTTPException(status_code=409, detail=(
+            "Un import est déjà en cours. Attendez sa fin (quelques minutes au plus) puis réessayez."))
+    maintenant = time.time()
+    etat = TacheImport(id=tid, statut="en_cours", total=max(len(rows) - 1, 0), dry_run=dry_run,
+                       nouvelle_annee=nouvelle_annee, debut=maintenant, maj=maintenant)
+    await r.set(_CLE_TACHE.format(tid), etat.model_dump_json(), ex=_DUREE_ETAT)
+    tache = asyncio.create_task(_executer_tache(etat, admin.id, rows))
+    _TACHES.add(tache)
+    tache.add_done_callback(_TACHES.discard)
+    return etat
+
+
+@router.get("/import/taches/{tache_id}", response_model=TacheImport)
+async def suivre_import(tache_id: str, _: AdminUser) -> TacheImport:
+    r = await get_redis()
+    brut = await r.get(_CLE_TACHE.format(tache_id))
+    if brut is None:
+        raise HTTPException(status_code=404, detail="Import introuvable (expiré ou jamais lancé).")
+    etat = TacheImport.model_validate_json(brut)
+    if etat.statut == "en_cours" and time.time() - etat.maj > _SILENCE_MAX:
+        # Le worker qui portait l'import s'est arrêté (redémarrage) : la
+        # transaction n'a pas été validée, rien n'est enregistré.
+        etat.statut = "interrompu"
+        etat.erreur = "L'import a été interrompu (redémarrage du serveur). Rien n'a été enregistré : relancez-le."
+    return etat
+
+
+async def _executer_tache(etat: TacheImport, admin_id, rows: list[tuple]) -> None:
+    r = await get_redis()
+    cle = _CLE_TACHE.format(etat.id)
+
+    async def enregistrer() -> None:
+        etat.maj = time.time()
+        await r.set(cle, etat.model_dump_json(), ex=_DUREE_ETAT)
+
+    async def progression(phase: str, traitees: int, total: int) -> None:
+        etat.phase, etat.traitees, etat.total = phase, traitees, total
+        await enregistrer()
+        await r.expire(_VERROU, _DUREE_VERROU)
+
+    try:
+        async with AsyncSessionLocal() as db:
+            admin = await db.get(User, admin_id)
+            resume = await executer_import(db, admin, rows, etat.dry_run, etat.nouvelle_annee, progression)
+            if not etat.dry_run:
+                await progression("enregistrement", etat.total, etat.total)
+                await db.commit()
+        if not etat.dry_run:
+            await invalidate_sync_caches()
+        etat.statut, etat.phase, etat.traitees, etat.resultat = "termine", "termine", etat.total, resume
+    except Exception:
+        logger.exception("[Import global] échec de la tâche %s", etat.id)
+        etat.statut = "erreur"
+        etat.erreur = "Erreur inattendue pendant l'import : rien n'a été enregistré. Réessayez ou contactez l'équipe technique."
+    finally:
+        try:
+            await enregistrer()
+            if await r.get(_VERROU) == etat.id:
+                await r.delete(_VERROU)
+        except Exception:
+            logger.exception("[Import global] état de la tâche %s non enregistré", etat.id)

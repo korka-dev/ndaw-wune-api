@@ -157,3 +157,56 @@ async def test_export_porte_la_colonne_fls(client, tag):
     r = await client.get(f"{API}/admin/import-export/export", headers=h)
     entete = [c.value for c in next(openpyxl.load_workbook(io.BytesIO(r.content)).active.iter_rows(max_row=1))]
     assert entete[-1] == "FLS"
+
+
+async def _attendre(client, h, tid):
+    import asyncio
+    for _ in range(200):
+        etat = (await client.get(f"{URL}/taches/{tid}", headers=h)).json()
+        if etat["statut"] != "en_cours":
+            return etat
+        await asyncio.sleep(0.05)
+    raise AssertionError("import jamais terminé")
+
+
+async def test_import_en_tache_de_fond_avec_progression(client, tag):
+    """Une base complète dépasse le délai du proxy : l'admin suit l'avancement."""
+    t = tag.upper()
+    code = uuid.uuid4().int % 10**8
+    lignes = [_ligne("IEF T", code, f"EE TACHE {t}", None, None, f"Tut {t}", _tel(), "NWN 1",
+                     f"T{i}{t}", f"ELEVE {i} {t}", "Titulaire", "Oui") for i in range(250)]
+    contenu = _classeur(lignes)
+    h = bearer(await login(client, await create_user(UserRole.admin, tag)))
+
+    r = await client.post(f"{URL}/taches", headers=h, params={"dry_run": "true"},
+                          files={"file": ("base.xlsx", contenu, XLSX)})
+    assert r.status_code == 202 and r.json()["total"] == 250 and r.json()["statut"] == "en_cours"
+    etat = await _attendre(client, h, r.json()["id"])
+    assert etat["statut"] == "termine" and etat["traitees"] == 250
+    assert etat["resultat"]["dry_run"] is True and etat["resultat"]["eleves_crees"] == 250
+    async with AsyncSessionLocal() as s:  # aperçu : rien d'enregistré
+        from sqlalchemy import func, select
+        n = (await s.execute(select(func.count()).select_from(School).where(School.code_ecole == code))).scalar_one()
+        assert n == 0
+
+    r = await client.post(f"{URL}/taches", headers=h, files={"file": ("base.xlsx", contenu, XLSX)})
+    etat = await _attendre(client, h, r.json()["id"])
+    assert etat["statut"] == "termine" and etat["resultat"]["eleves_crees"] == 250
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select
+        assert (await s.execute(select(School).where(School.code_ecole == code))).scalar_one().fls is True
+
+    assert (await client.get(f"{URL}/taches/inconnue", headers=h)).status_code == 404
+
+
+async def test_un_seul_import_a_la_fois(client, tag):
+    from app.core.redis import get_redis
+    r = await get_redis()
+    await r.set("import_global:en_cours", "autre", ex=30)
+    try:
+        h = bearer(await login(client, await create_user(UserRole.admin, tag)))
+        rep = await client.post(f"{URL}/taches", headers=h,
+                                files={"file": ("b.xlsx", _classeur([]), XLSX)})
+        assert rep.status_code == 409
+    finally:
+        await r.delete("import_global:en_cours")
