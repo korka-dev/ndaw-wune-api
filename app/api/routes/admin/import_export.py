@@ -27,10 +27,12 @@ Mises à jour (lot L10)
              (school_id, classe), cf. CLAUDE.md §2).
     Élève  : école, classe, nom, sexe, type (titulaire / remplaçant), groupes.
 
-Option « nouvelle année » : le fichier fait référence. Les classes des tuteurs
-sont exactement celles du fichier, et les élèves, tuteurs et superviseurs
-absents du fichier sont ARCHIVÉS (APP-15 : historique conservé, restauration
-possible). Rien n'est jamais supprimé.
+Option « nouvelle année » : le fichier fait référence. Son code école fait
+foi (une fiche de l'an dernier au même nom mais à un autre code n'est pas
+reprise : l'école de l'année est créée). Les classes des tuteurs sont
+exactement celles du fichier, et les écoles, classes, élèves, tuteurs et
+superviseurs absents du fichier sont ARCHIVÉS (APP-15 : historique conservé,
+restauration possible). Rien n'est jamais supprimé.
 """
 from __future__ import annotations
 
@@ -189,6 +191,8 @@ class ImportSummary(BaseModel):
     homonymes:          int = 0  # élèves de même nom dans une classe : code ajouté au prénom
     eleves_archives:    int = 0  # nouvelle année : élèves absents du fichier
     comptes_archives:   int = 0  # nouvelle année : tuteurs / superviseurs absents du fichier
+    ecoles_archivees:   int = 0  # nouvelle année : écoles absentes du fichier
+    classes_archivees:  int = 0  # nouvelle année : classes absentes du fichier
     erreurs:            list[str] = []
     erreurs_tronquees:  int = 0  # erreurs non listées (au-delà de 50)
     avertissements:     list[str] = []
@@ -342,9 +346,15 @@ async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nou
     tels_fichier: set[str] = set()
     # Nouvelle année : classes et niveaux de chaque tuteur d'après le fichier.
     classes_tuteurs: dict = {}
+    codes_ecoles_fichier: set[int] = set()
     for row in rows[1:]:
         if c := _s(get(row, "Code Élève")):
             codes_fichier.add(c)
+        try:
+            if (ce := _s(get(row, "Code École"))) is not None:
+                codes_ecoles_fichier.add(int(ce))
+        except ValueError:
+            pass
         if (tn := _s(get(row, "Tuteur"))) and (cl := _s(get(row, "Classe"))):
             try:
                 tt = _normalize_sn_phone(_s(get(row, "Téléphone Tuteur")))
@@ -378,6 +388,7 @@ async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nou
     comptes_vus: set[uuid_module.UUID] = set()
     ecoles_vues: set[uuid_module.UUID] = set()
     eleves_vus: set[uuid_module.UUID] = set()
+    classes_vues: set[uuid_module.UUID] = set()
 
     async def charger() -> None:
         def _all(model):
@@ -444,6 +455,12 @@ async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nou
         """
         if code_ecole is not None and code_ecole in schools_by_code:
             return schools_by_code[code_ecole]
+        if code_ecole is not None and nouvelle_annee:
+            # Nouvelle année : le fichier fait référence, son code aussi. Une
+            # fiche de l'an dernier au même nom mais à l'ancien code n'est ni
+            # reprise ni bloquante : l'école de l'année est créée, l'ancienne
+            # fiche, absente du fichier, sera archivée (historique conservé).
+            return None
         homonymes = schools_by_name.get(_nkey(nom), [])
         if code_ecole is not None:
             autres = [h for h in homonymes if h.code_ecole is not None and h.code_ecole != code_ecole]
@@ -570,6 +587,7 @@ async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nou
         vus_ligne: set = set()
         ecoles_ligne: set = set()
         eleves_ligne: set = set()
+        classes_ligne: set = set()
         try:
             async with db.begin_nested():
                 ecole_name = _s(get(row, "École"))
@@ -691,6 +709,7 @@ async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nou
                     delta["classes_creees"] += 1
                 elif classes_by_key[class_key].archived_at is not None:
                     classes_by_key[class_key].archived_at = None
+                classes_ligne.add(classes_by_key[class_key].id)
 
                 # 5) Élève (clé : code_eleve, repli sur identité)
                 code_eleve = _s(get(row, "Code Élève"))
@@ -783,12 +802,14 @@ async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nou
         comptes_vus.update(vus_ligne)
         ecoles_vues.update(ecoles_ligne)
         eleves_vus.update(eleves_ligne)
+        classes_vues.update(classes_ligne)
         for k, v in delta.items():
             setattr(summary, k, getattr(summary, k) + v)
 
     if nouvelle_annee and summary.lignes_validees:
         await avancer("archivage", total, total)
-        await _archiver_hors_fichier(db, summary, admin, eleves_vus, codes_fichier, comptes_vus, tels_fichier)
+        await _archiver_hors_fichier(db, summary, admin, eleves_vus, codes_fichier, comptes_vus, tels_fichier,
+                                     ecoles_vues, codes_ecoles_fichier, classes_vues)
 
     if eleves_vus:
         await avancer("controles", total, total)
@@ -812,7 +833,8 @@ async def executer_import(db, admin: User, rows: list[tuple], dry_run: bool, nou
 
 
 async def _archiver_hors_fichier(db, summary: ImportSummary, admin: User, eleves_vus: set, codes_fichier: set,
-                                 comptes_vus: set, tels_fichier: set) -> None:
+                                 comptes_vus: set, tels_fichier: set, ecoles_vues: set,
+                                 codes_ecoles_fichier: set, classes_vues: set) -> None:
     """Nouvelle année : archive (réversible, historique conservé — APP-15) les
     élèves, tuteurs et superviseurs que le fichier ne cite pas.
 
@@ -834,12 +856,28 @@ async def _archiver_hors_fichier(db, summary: ImportSummary, admin: User, eleves
             continue
         u.archived_at, u.status, u.tokens_valid_from = now, UserStatus.inactif, now
         summary.comptes_archives += 1
+    ecoles = (await db.execute(select(School).where(School.archived_at.is_(None)))).scalars().all()
+    for sc in ecoles:
+        if sc.id in ecoles_vues or (sc.code_ecole is not None and sc.code_ecole in codes_ecoles_fichier):
+            continue
+        sc.archived_at = now
+        summary.ecoles_archivees += 1
+    gardees = {sc.id for sc in ecoles if sc.archived_at is None}
+    classes = (await db.execute(select(SchoolClasse).where(SchoolClasse.archived_at.is_(None)))).scalars().all()
+    for c in classes:
+        # Classe d'une école gardée mais absente du fichier (CE1 A de l'an dernier…),
+        # ou classe d'une école archivée.
+        if c.id in classes_vues and c.school_id in gardees:
+            continue
+        c.archived_at = now
+        summary.classes_archivees += 1
     await db.flush()
-    if summary.eleves_archives or summary.comptes_archives:
+    if summary.eleves_archives or summary.comptes_archives or summary.ecoles_archivees:
         journaliser(db, acteur=admin, action="archive", entity="Import global", method="POST",
                     path="/admin/import-export/import",
-                    description=(f"Nouvelle année : {summary.eleves_archives} élève(s) et "
-                                 f"{summary.comptes_archives} compte(s) absents du fichier archivés."))
+                    description=(f"Nouvelle année : {summary.eleves_archives} élève(s), "
+                                 f"{summary.comptes_archives} compte(s), {summary.ecoles_archivees} école(s) et "
+                                 f"{summary.classes_archivees} classe(s) absents du fichier archivés."))
 
 
 async def _eleves_sans_tuteur(db, eleves_vus: set) -> list[str]:

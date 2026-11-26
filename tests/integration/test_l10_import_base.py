@@ -64,7 +64,9 @@ async def test_base_2026_2027_nouvelle_annee(client, tag):
         # L'année précédente : même école (même code), autre IEF, type non renseigné.
         ecole = School(name=f"EE ANCIENNE {t}", code_ecole=code, region="IEF Ancienne")
         autre = School(name=f"Autre ecole {t}")
-        s.add_all([ecole, autre])
+        # Même nom qu'une école du fichier, mais l'ancien code : ni reprise ni refus.
+        ancien_code = School(name=f"EE SANS TUTEUR {t}", code_ecole=code + 50)
+        s.add_all([ecole, autre, ancien_code])
         await s.flush()
         tel_revenu = _tel()
         revenu = User(name=f"Tuteur Revenu {t}", phone=tel_revenu, email=f"revenu.{tag}@test.invalid",
@@ -77,7 +79,7 @@ async def test_base_2026_2027_nouvelle_annee(client, tag):
         s.add_all([revenu, parti, ancien, revient])
         await s.commit()
         ids = {"ecole": ecole.id, "revenu": revenu.id, "parti": parti.id, "ancien": ancien.id,
-               "revient": revient.id}
+               "revient": revient.id, "autre": autre.id, "ancien_code": ancien_code.id}
 
     tel_sup, tel_tut2 = _tel(), _tel()
     ief = f"IEF Nouvelle {t}"
@@ -104,6 +106,7 @@ async def test_base_2026_2027_nouvelle_annee(client, tag):
     assert apercu["comptes_reaffectes"] == 1 and apercu["tuteurs_crees"] == 1 and apercu["superviseurs_crees"] == 1
     assert apercu["eleves_crees"] == 4 and apercu["eleves_mis_a_jour"] == 1 and apercu["homonymes"] == 1
     assert apercu["eleves_archives"] >= 1 and apercu["comptes_archives"] >= 1
+    assert apercu["ecoles_archivees"] >= 2 and apercu["classes_archivees"] >= 0
     assert any("EE SANS TUTEUR" in a for a in apercu["avertissements"])
     async with AsyncSessionLocal() as s:  # aperçu : rien n'a changé
         assert (await s.get(School, ids["ecole"])).fls is None
@@ -119,6 +122,9 @@ async def test_base_2026_2027_nouvelle_annee(client, tag):
         assert (await s.get(User, ids["parti"])).archived_at is not None
         assert (await s.get(User, ids["parti"])).status == UserStatus.inactif
         assert (await s.get(Eleve, ids["ancien"])).archived_at is not None
+        assert (await s.get(School, ids["autre"])).archived_at is not None
+        assert (await s.get(School, ids["ancien_code"])).archived_at is not None
+        assert (await s.get(School, ids["ecole"])).archived_at is None
         el = await s.get(Eleve, ids["revient"])
         assert (el.school_id, el.classe, el.nom, el.prenom, el.statut_selection) == \
             (ids["ecole"], "NWN 1", "AWA FALL", None, "Titulaire")
@@ -139,6 +145,7 @@ async def test_base_2026_2027_nouvelle_annee(client, tag):
     r2 = await _envoyer(client, h, contenu, nouvelle_annee=True)
     assert (r2["eleves_crees"], r2["eleves_mis_a_jour"], r2["comptes_reaffectes"], r2["ecoles_mises_a_jour"],
             r2["eleves_archives"], r2["comptes_archives"], r2["ignores"]) == (0, 0, 0, 0, 0, 0, 5)
+    assert (r2["ecoles_archivees"], r2["classes_archivees"], r2["lignes_en_erreur"]) == (0, 0, 0)
 
 
 async def test_numero_deja_pris_par_un_autre_role(client, tag):
