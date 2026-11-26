@@ -62,6 +62,7 @@ class SyncPlanningSegment(BaseModel):
     matiere:     Optional[str] = None
     titre:       Optional[str] = None   # dérivé : matiere ?? classe
     reserve_fls: bool = False           # lot L9 (informatif : déjà filtré par le serveur)
+    type_ecole:  str = "tous"           # lot L11 (informatif : déjà filtré par le serveur)
 
     model_config = {"from_attributes": True}
 

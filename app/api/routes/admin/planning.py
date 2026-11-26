@@ -246,6 +246,94 @@ def _parse_pdf(content: bytes) -> tuple[list[dict], list[dict]]:
     return segments, errors
 
 
+_DOCX_CRENEAU = re.compile(
+    r"(\d{1,2})\s*h\s*(\d{2})?\s*(?:[-–]|à|a)\s*(\d{1,2})\s*h\s*(\d{2})?", re.IGNORECASE)
+_DOCX_DUREE = re.compile(r"\s*\(\s*\d+\s*(?:mn|min)\s*\)\s*$", re.IGNORECASE)
+
+
+def _parse_docx(content: bytes) -> tuple[list[dict], list[dict]]:
+    """Emploi du temps Word (lot L11). Deux mises en page reconnues :
+
+    - un tableau par jour (colonnes Heure | Activité), précédé du nom du jour
+      (« LUNDI ») : emploi du temps sans FLS ;
+    - un tableau unique Horaire | durée | Lundi | Mercredi | Vendredi, une
+      cellule fusionnée valant pour tous les jours : emploi du temps FLS.
+
+    Horaires « 16h00-16h05 » ou « 16 h 00 à 16 h 05 » ; la durée « (5 mn) » est retirée.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            if sum(i.file_size for i in zf.infolist()) > 50 * 1024 * 1024:
+                raise HTTPException(413, "Document Word trop volumineux une fois décompressé.")
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Document Word illisible : seul le format .docx est accepté.")
+    try:
+        import docx
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        document = docx.Document(io.BytesIO(content))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, f"Impossible de lire le document Word : {exc}")
+
+    def texte(cellule) -> str:
+        return " ".join(cellule.text.split())
+
+    def jour_de(t: str) -> int | None:
+        return _JOURS_MAP.get(re.sub(r"[^a-z0-9 ]", "", _sans_accents(t).lower()).strip())
+
+    segments: list[dict] = []
+    errors: list[dict] = []
+    jour_courant: int | None = None
+    n_table = 0
+    for bloc in document.element.body.iterchildren():
+        tag = bloc.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            j = jour_de(Paragraph(bloc, document).text)
+            if j is not None:
+                jour_courant = j
+            continue
+        if tag != "tbl":
+            continue
+        n_table += 1
+        table = Table(bloc, document)
+        lignes = [[texte(c) for c in r.cells] for r in table.rows]
+        if not lignes:
+            continue
+        entete = lignes[0]
+        cols_jours = {i: jour_de(h) for i, h in enumerate(entete) if jour_de(h) is not None}
+        for n, ligne in enumerate(lignes[1:], start=2):
+            if not any(ligne):
+                continue
+            m = _DOCX_CRENEAU.search(ligne[0])
+            if not m:
+                errors.append({"row": f"tableau {n_table}, ligne {n}", "error": f"horaire illisible : « {ligne[0]} »"})
+                continue
+            debut = f"{int(m.group(1)):02d}:{m.group(2) or '00'}"
+            fin = f"{int(m.group(3)):02d}:{m.group(4) or '00'}"
+            if cols_jours:
+                cibles = [(j, ligne[i]) for i, j in cols_jours.items() if i < len(ligne)]
+            elif jour_courant is not None:
+                cibles = [(jour_courant, ligne[-1])]
+            else:
+                errors.append({"row": f"tableau {n_table}", "error": "jour introuvable (titre LUNDI… attendu avant le tableau)"})
+                break
+            for jour, activite in cibles:
+                matiere = _DOCX_DUREE.sub("", activite).strip()
+                if matiere:
+                    segments.append({"jour": jour, "heure_debut": debut, "heure_fin": fin, "matiere": matiere[:100]})
+    if not segments and not errors:
+        raise HTTPException(422, "Aucun créneau trouvé dans le document Word : un emploi du temps Ndaw Wune est attendu.")
+    return segments, errors
+
+
+def _sans_accents(t: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", t) if not unicodedata.combining(c))
+
+
 # ── Router ─────────────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/planning", tags=["Admin — Planning"])
 
@@ -262,6 +350,7 @@ def _enrich(seg: PlanningSegment, teacher_name: str | None = None) -> PlanningSe
         classe=seg.classe,
         matiere=seg.matiere,
         reserve_fls=bool(seg.reserve_fls),
+        type_ecole=seg.type_ecole or "tous",
         teacher_name=teacher_name,
     )
 
@@ -350,8 +439,12 @@ async def export_planning_csv(
 @router.post("", response_model=PlanningSegmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_segment(body: PlanningSegmentCreate, db: DB, _: AdminUser):
     data = body.model_dump()
-    if data.get("reserve_fls") is None:
-        data["reserve_fls"] = est_creneau_fls(data.get("matiere"))
+    if data.get("type_ecole") is None:
+        reserve = data.get("reserve_fls")
+        if reserve is None:
+            reserve = est_creneau_fls(data.get("matiere"))
+        data["type_ecole"] = "fls" if reserve else "tous"
+    data["reserve_fls"] = data["type_ecole"] == "fls"
     seg = PlanningSegment(**data)
     db.add(seg)
     await db.commit()
@@ -369,8 +462,15 @@ async def update_segment(seg_id: uuid.UUID, body: PlanningSegmentUpdate, db: DB,
         raise HTTPException(status_code=404, detail="Créneau introuvable.")
     # exclude_unset (et non exclude_none) : permet d'effacer la semaine en envoyant null
     champs = body.model_dump(exclude_unset=True)
+    if champs.get("type_ecole") is None:
+        champs.pop("type_ecole", None)
     if champs.get("reserve_fls") is None:
         champs.pop("reserve_fls", None)
+    elif "type_ecole" not in champs:
+        # Case « réservé FLS » (lot L9) : réservé → « fls » ; décoché → « tous ».
+        champs["type_ecole"] = "fls" if champs["reserve_fls"] else "tous"
+    if "type_ecole" in champs:
+        champs["reserve_fls"] = champs["type_ecole"] == "fls"
     for field, value in champs.items():
         setattr(seg, field, value)
     await db.commit()
@@ -398,6 +498,8 @@ async def import_planning(
     _: AdminUser,
     session_id: uuid.UUID,
     semaine: int | None = Query(None, ge=1, le=53),
+    type_ecole: str = Query("tous", pattern="^(tous|fls|sans_fls)$", description=(
+        "Lot L11 : emploi du temps des écoles avec FLS (fls), sans FLS (sans_fls) ou de toutes (tous).")),
     dry_run: bool = Query(False, description="Aperçu : rien n'est modifié."),
     accepter_erreurs: bool = Query(
         False, description="Confirme le remplacement même si des lignes du fichier sont invalides.",
@@ -430,10 +532,13 @@ async def import_planning(
             "message": "Ce fichier est la répartition des écoles avec / sans FLS : utilisez « Importer la répartition FLS ».",
         })
 
+    is_docx = filename.endswith(".docx") or "wordprocessingml" in ctype
     is_pdf = filename.endswith(".pdf") or "pdf" in ctype
     is_excel = filename.endswith(".xlsx") or filename.endswith(".xls") or "excel" in ctype or "officedocument.spreadsheetml" in ctype
 
-    if is_pdf:
+    if is_docx:
+        segments, errors = _parse_docx(content)
+    elif is_pdf:
         segments, errors = _parse_pdf(content)
     elif is_excel:
         segments, errors = _parse_excel(content)
@@ -470,15 +575,21 @@ async def import_planning(
     if session is None:
         raise HTTPException(status_code=404, detail="Campagne introuvable : planning non modifié.")
 
+    # Lot L11 : importer l'emploi du temps d'un type remplace celui de ce type ET
+    # les créneaux « tous » (sinon les deux se superposeraient), jamais celui de
+    # l'autre type. Un import « tous » remplace tout, comme avant.
     perimetre = and_(PlanningSegment.session_id == session_id,
-                     PlanningSegment.semaine == semaine if semaine is not None else true())
+                     PlanningSegment.semaine == semaine if semaine is not None else true(),
+                     PlanningSegment.type_ecole.in_(("tous", type_ecole)) if type_ecole != "tous" else true())
     remplaces = (await db.execute(select(func.count()).select_from(PlanningSegment).where(perimetre))).scalar_one()
     apercu = {
         "dry_run": dry_run,
         "session_id": str(session_id),
         "session_nom": session.name,
         "semaine": semaine,
-        "perimetre": f"{session.name} — " + (f"semaine {semaine}" if semaine is not None else "toutes les semaines"),
+        "type_ecole": type_ecole,
+        "perimetre": f"{session.name} — " + (f"semaine {semaine}" if semaine is not None else "toutes les semaines")
+                     + {"tous": "", "fls": " — écoles avec FLS", "sans_fls": " — écoles sans FLS"}[type_ecole],
         "a_remplacer": remplaces,
         "valides": len(valides),
         "segments": [
@@ -505,8 +616,9 @@ async def import_planning(
 
     imported = 0
     for seg_data in valides:
-        db.add(PlanningSegment(session_id=session_id, semaine=semaine,
-                               reserve_fls=est_creneau_fls(seg_data.get("matiere")), **seg_data))
+        type_seg = type_ecole if type_ecole != "tous" else ("fls" if est_creneau_fls(seg_data.get("matiere")) else "tous")
+        db.add(PlanningSegment(session_id=session_id, semaine=semaine, type_ecole=type_seg,
+                               reserve_fls=type_seg == "fls", **seg_data))
         imported += 1
 
     try:
@@ -545,12 +657,16 @@ async def resume_fls(db: DB, _: AdminUser, session_id: uuid.UUID | None = None) 
         select(School.fls, func.count()).where(School.archived_at.is_(None)).group_by(School.fls)
     )).all()
     compte = {fls: int(n) for fls, n in lignes}
-    q = select(func.count()).select_from(PlanningSegment).where(PlanningSegment.reserve_fls.is_(True))
+    q = select(PlanningSegment.type_ecole, func.count()).group_by(PlanningSegment.type_ecole)
     if session_id:
         q = q.where(PlanningSegment.session_id == session_id)
+    par_type = {t: int(n) for t, n in (await db.execute(q)).all()}
     return {
         "avec_fls": compte.get(True, 0), "sans_fls": compte.get(False, 0), "non_renseignees": compte.get(None, 0),
-        "creneaux_reserves_fls": (await db.execute(q)).scalar_one(),
+        "creneaux_reserves_fls": par_type.get("fls", 0),
+        # Lot L11 : nombre de créneaux de chaque emploi du temps.
+        "creneaux": {"tous": par_type.get("tous", 0), "fls": par_type.get("fls", 0),
+                     "sans_fls": par_type.get("sans_fls", 0)},
     }
 
 

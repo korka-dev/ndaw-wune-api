@@ -1,9 +1,9 @@
 """Écoles avec / sans FLS (français langue seconde) — lot L9.
 
-- Un créneau d'emploi du temps peut être réservé aux écoles avec FLS
-  (`planning_segments.reserve_fls`). Il est masqué aux tuteurs d'une école
-  marquée sans FLS (`schools.fls = false`) ; une école non renseignée
-  (`NULL`) voit tout l'emploi du temps, comme avant.
+- Lot L11 : chaque créneau porte un type d'école (`planning_segments.type_ecole`) :
+  « tous », « fls » ou « sans_fls ». Un tuteur voit les créneaux « tous » et
+  ceux du type de son école ; une école non renseignée suit l'emploi du temps
+  sans FLS. (Lot L9 : `reserve_fls`, conservé, vaut type_ecole == « fls ».)
 - La répartition s'importe depuis le fichier de l'équipe programme
   (« Extraction_IA_IEF_ecoles_FLS.xlsx ») : colonnes IA, IEF, « Écoles avec
   FLS », « Écoles sans FLS », une feuille récapitulative et une par IEF.
@@ -39,11 +39,21 @@ def est_creneau_fls(matiere: Optional[str]) -> bool:
     return "langue seconde" in m or bool(_FLS_MOT.search(m))
 
 
+TYPES_ECOLE = ("tous", "fls", "sans_fls")
+
+
+def type_planning(school: Optional[School]) -> str:
+    """Emploi du temps d'une école (lot L11) : « fls » pour une école avec FLS,
+    « sans_fls » sinon — une école non renseignée suit l'emploi du temps sans
+    FLS, le programme de base (les deux emplois du temps se chevauchent : en
+    montrer deux doublerait les créneaux)."""
+    return "fls" if school is not None and school.fls is True else "sans_fls"
+
+
 def condition_visibilite(school: Optional[School]):
-    """Condition SQL sur les créneaux visibles par un tuteur de cette école."""
-    if school is not None and school.fls is False:
-        return PlanningSegment.reserve_fls.is_(False)
-    return None
+    """Condition SQL sur les créneaux visibles par un tuteur de cette école :
+    ceux de tout le monde (« tous ») et ceux de son type d'école."""
+    return PlanningSegment.type_ecole.in_(("tous", type_planning(school)))
 
 
 # ── Import de la répartition ──────────────────────────────────────────────────
@@ -230,10 +240,11 @@ async def ecoles_sans_type(db: AsyncSession) -> int:
 
 
 def filtre_type_ecole(type_ecole: Optional[str]):
-    """Aperçu admin du planning : « sans_fls » masque les créneaux réservés FLS."""
-    if type_ecole in (None, "", "tous", "fls"):
+    """Aperçu admin : « fls » / « sans_fls » = ce que voit une école de ce type ;
+    « tous » ou vide = tous les créneaux."""
+    if type_ecole in (None, "", "tous"):
         return None
-    if type_ecole == "sans_fls":
-        return PlanningSegment.reserve_fls.is_(False)
+    if type_ecole in ("fls", "sans_fls"):
+        return PlanningSegment.type_ecole.in_(("tous", type_ecole))
     raise HTTPException(status_code=422, detail="type_ecole : tous, fls ou sans_fls.")
 

@@ -39,7 +39,8 @@ async def _campagne_avec_planning(tag: str) -> ProgramSession:
                                     (time(11, 20), time(11, 50), "Français langue seconde"),
                                     (time(11, 50), time(12, 10), "Lecture indépendante")]:
             s.add(PlanningSegment(session_id=ps.id, jour=0, heure_debut=debut, heure_fin=fin, matiere=matiere,
-                                  reserve_fls=est_creneau_fls(matiere)))
+                                  reserve_fls=est_creneau_fls(matiere),
+                                  type_ecole="fls" if est_creneau_fls(matiere) else "tous"))
         await s.commit()
         await s.refresh(ps)
         return ps
@@ -68,7 +69,8 @@ async def test_tuteur_ecole_sans_fls_ne_voit_pas_le_creneau_fls(client, tag):
         assert sync["active_session"]["id"] == str(camp.id)
         matieres[cas] = [p["matiere"] for p in sync["planning"]]
     assert "Français langue seconde" in matieres["avec"]
-    assert "Français langue seconde" in matieres["inconnu"]  # non renseigné : rien ne change
+    # Lot L11 : une école non renseignée suit l'emploi du temps sans FLS.
+    assert matieres["inconnu"] == ["Leçon de lecture", "Lecture indépendante"]
     assert matieres["sans"] == ["Leçon de lecture", "Lecture indépendante"]
 
 

@@ -1,7 +1,7 @@
 import uuid
 from datetime import time
 from typing import Optional
-from sqlalchemy import Boolean, String, Integer, Time, ForeignKey, UniqueConstraint, false
+from sqlalchemy import Boolean, CheckConstraint, String, Integer, Time, ForeignKey, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.database import Base
@@ -42,9 +42,13 @@ class PlanningSegment(Base, UUIDMixin, TimestampMixin):
     # Lot L9 : créneau réservé aux écoles avec FLS (français langue seconde),
     # masqué aux tuteurs des écoles sans FLS.
     reserve_fls: Mapped[bool]           = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    # Lot L11 : emploi du temps du type d'école — « tous », « fls » (écoles
+    # avec FLS) ou « sans_fls ». `reserve_fls` reste égal à (type_ecole == "fls").
+    type_ecole:  Mapped[str]            = mapped_column(String(10), nullable=False, default="tous", server_default="tous")
 
     __table_args__ = (
-        UniqueConstraint("session_id", "semaine", "jour", "heure_debut", name="uq_planning_segment"),
+        UniqueConstraint("session_id", "semaine", "jour", "heure_debut", "type_ecole", name="uq_planning_segment"),
+        CheckConstraint("type_ecole IN ('tous', 'fls', 'sans_fls')", name="ck_planning_type_ecole"),
     )
 
     session: Mapped["ProgramSession"] = relationship("ProgramSession", back_populates="planning_segments")
