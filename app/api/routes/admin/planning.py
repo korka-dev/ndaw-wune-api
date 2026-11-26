@@ -252,7 +252,9 @@ _DOCX_DUREE = re.compile(r"\s*\(\s*\d+\s*(?:mn|min)\s*\)\s*$", re.IGNORECASE)
 
 
 def _parse_docx(content: bytes) -> tuple[list[dict], list[dict]]:
-    """Emploi du temps Word (lot L11). Deux mises en page reconnues :
+    """Emploi du temps Word (lot L11). Les jours nommés deviennent des numéros de
+    séance dans l'ordre de la semaine (lundi, mercredi, vendredi → Jour 1, 2, 3).
+    Deux mises en page reconnues :
 
     - un tableau par jour (colonnes Heure | Activité), précédé du nom du jour
       (« LUNDI ») : emploi du temps sans FLS ;
@@ -326,6 +328,11 @@ def _parse_docx(content: bytes) -> tuple[list[dict], list[dict]]:
                     segments.append({"jour": jour, "heure_debut": debut, "heure_fin": fin, "matiere": matiere[:100]})
     if not segments and not errors:
         raise HTTPException(422, "Aucun créneau trouvé dans le document Word : un emploi du temps Ndaw Wune est attendu.")
+    # Le « jour » d'un créneau est un numéro de séance (Jour 1, 2, 3…), pas un
+    # jour calendaire : lundi, mercredi, vendredi → Jour 1, Jour 2, Jour 3.
+    rang = {j: i for i, j in enumerate(sorted({s["jour"] for s in segments}))}
+    for seg in segments:
+        seg["jour"] = rang[seg["jour"]]
     return segments, errors
 
 

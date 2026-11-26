@@ -106,9 +106,10 @@ async def test_deux_emplois_du_temps_selon_le_type_d_ecole(client, tag):
     assert (len(par_type["sans_fls"]), len(par_type["fls"])) == (9, 9)
     assert all(x.reserve_fls for x in par_type["fls"]) and not any(x.reserve_fls for x in par_type["sans_fls"])
     assert {x.matiere for x in par_type["sans_fls"]} == {"Promesse", "Leçon Maths", "Lecture indépendante", "Jeu éducatif"}
-    vendredi = sorted((x.heure_debut.strftime("%H:%M"), x.matiere) for x in par_type["sans_fls"] if x.jour == 4)
+    vendredi = sorted((x.heure_debut.strftime("%H:%M"), x.matiere) for x in par_type["sans_fls"] if x.jour == 2)
     assert vendredi[-1] == ("17:45", "Jeu éducatif")
-    assert {x.jour for x in par_type["fls"]} == {0, 2, 4}
+    assert {x.jour for x in par_type["fls"]} == {0, 1, 2}  # lundi, mercredi, vendredi → Jour 1, 2, 3
+    assert {x.jour for x in par_type["sans_fls"]} == {0, 1, 2}
 
     avec = await _sync(client, tag, camp, True)
     sans = await _sync(client, tag, camp, False)
