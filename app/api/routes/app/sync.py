@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 
-from app.core.deps import DB, TeacherUser
+from app.core.app_version import is_outdated
+from app.core.deps import DB, CurrentUser
+from app.models.user import UserRole
 from app.core.redis import get_redis
 from app.core.config import settings
 from app.schemas.sync import ParametresTerrain, SyncPayload
@@ -18,14 +21,30 @@ router = APIRouter(prefix="/sync", tags=["App — Sync"])
 _CACHE_PREFIX = "sync:"
 
 
+# L'espace inspecteur arrive avec la 1.4 : une version plus ancienne ouvre
+# l'accueil tuteur (vide) à un inspecteur. On lui demande de mettre à jour.
+VERSION_ESPACE_INSPECTEUR = "1.4.1"
+
+
 @router.get("", response_model=SyncPayload)
-async def sync(current_user: TeacherUser, db: DB, request: Request) -> SyncPayload:
+async def sync(current_user: CurrentUser, db: DB, request: Request) -> SyncPayload:
     """
     Télécharge toutes les données nécessaires pour fonctionner hors-ligne.
     Le résultat est mis en cache Redis (TTL = SYNC_CACHE_TTL_SECONDS).
     Si Redis est indisponible, on construit le payload directement depuis la DB
     sans mettre en cache (dégradé mais fonctionnel).
     """
+    if current_user.role == UserRole.inspecteur:
+        version = request.headers.get("x-app-version")
+        if is_outdated(version, VERSION_ESPACE_INSPECTEUR) or not version:
+            return JSONResponse(status_code=status.HTTP_426_UPGRADE_REQUIRED, content={
+                "detail": "APP_UPDATE_REQUIRED",
+                "min_version": VERSION_ESPACE_INSPECTEUR,
+                "latest_version": settings.LATEST_APP_VERSION or VERSION_ESPACE_INSPECTEUR,
+            })
+    if current_user.role != UserRole.enseignant:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès réservé aux enseignants.")
+
     cache_key = f"{_CACHE_PREFIX}{current_user.id}"
 
     # ── Lecture cache Redis ────────────────────────────────────────────────────

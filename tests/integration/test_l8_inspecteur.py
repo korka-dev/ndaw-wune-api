@@ -115,7 +115,14 @@ async def test_inspecteur_en_lecture_seule_et_hors_des_autres_espaces(client, ta
     assert (await client.put(f"{API}/app/rapports/journalier/{rid}", headers=h,
                              json={"motif": "x", "nb_absences": 1})).status_code == 403
     for chemin in ("/app/sync", "/app/supervisor/sync", "/admin/schools", "/admin/inspecteurs"):
-        assert (await client.get(f"{API}{chemin}", headers=h)).status_code == 403, chemin
+        assert (await client.get(f"{API}{chemin}", headers={**h, "X-App-Version": "1.4.1"})).status_code == 403, chemin
+
+    # Une app antérieure à l'espace inspecteur (1.3.x) ouvrait l'accueil tuteur :
+    # la synchronisation tuteur lui demande de mettre à jour (écran « Mise à jour »).
+    for version in ("1.3.0", None):
+        r = await client.get(f"{API}/app/sync", headers={**h, **({"X-App-Version": version} if version else {})})
+        assert r.status_code == 426 and r.json()["detail"] == "APP_UPDATE_REQUIRED", version
+        assert r.json()["min_version"] == "1.4.1"
 
     # Les autres rôles n'ont pas accès à l'espace inspecteur.
     ht = bearer(await login(client, await create_user(UserRole.enseignant, tag)))
