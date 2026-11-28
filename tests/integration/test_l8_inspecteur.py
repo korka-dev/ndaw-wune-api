@@ -53,6 +53,12 @@ async def test_admin_cree_un_inspecteur_rattache_a_une_ief_existante(client, tag
     assert (cree["role"], cree["ief"], cree["must_change_password"]) == ("inspecteur", ief, True)
     assert any(u["id"] == cree["id"] for u in (await client.get(url, headers=ha)).json()["items"])
 
+    # Le formulaire admin n'envoie pas de rôle : la création doit passer quand même.
+    sans_role = {"name": "Insp sans rôle", "phone": f"77{uuid.uuid4().int % 10**7:07d}", "ief": ief}
+    r = await client.post(url, headers=ha, json=sans_role)
+    assert r.status_code == 201, r.text
+    assert r.json()["role"] == "inspecteur"
+
     # Champs propres aux tuteurs refusés en modification.
     r = await client.patch(f"{url}/{cree['id']}", headers=ha, json={"classes": ["CI"]})
     assert r.status_code == 422

@@ -48,8 +48,14 @@ async def iefs(db: DB, _: AdminUser) -> list[dict]:
     return await liste_iefs(db)
 
 
+class InspecteurCreate(UserCreate):
+    # Le rôle est imposé par la route : le formulaire admin ne l'envoie pas
+    # (sinon 422 « Field required » à chaque création).
+    role: UserRole = UserRole.inspecteur
+
+
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def create_inspecteur(body: UserCreate, db: DB, _: AdminUser) -> UserResponse:
+async def create_inspecteur(body: InspecteurCreate, db: DB, _: AdminUser) -> UserResponse:
     """Crée un inspecteur ; mot de passe temporaire à changer à la première connexion."""
     if not body.phone:
         raise HTTPException(status_code=422, detail="Le téléphone est obligatoire : l'inspecteur se connecte à l'application avec.")
