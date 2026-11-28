@@ -141,6 +141,16 @@ async def request_logging_middleware(request: Request, call_next):
 
 
 @app.middleware("http")
+async def corp_middleware(request: Request, call_next):
+    """Version web de l'app (PWA, lot L12) : la page est isolée (COEP
+    require-corp, nécessaire à sa base locale). Les photos et fichiers de l'API
+    doivent alors se déclarer chargeables depuis un autre site."""
+    response = await call_next(request)
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "cross-origin")
+    return response
+
+
+@app.middleware("http")
 async def app_version_middleware(request: Request, call_next):
     """APP-46 : refuse (426) une version mobile plus ancienne que MIN_APP_VERSION."""
     if settings.MIN_APP_VERSION and request.url.path.startswith("/api/v1/app/"):

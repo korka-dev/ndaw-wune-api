@@ -45,3 +45,9 @@ async def test_nouvelle_app_et_modification_du_pointage(client, tag):
     pointage = await _jour_enregistre(client, h)
     assert pointage["jour_cours"] == 3
     assert pointage["entries"] == [{"teacher_id": str(tuteur.id), "present": False, "motif": "Maladie"}]
+
+
+async def test_reponses_chargeables_par_la_pwa(client):
+    """Lot L12 : la PWA est isolée (COEP require-corp) ; l'API doit l'autoriser."""
+    r = await client.get(f"{API}/app-version")
+    assert r.headers.get("cross-origin-resource-policy") == "cross-origin"
