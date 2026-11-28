@@ -14,11 +14,12 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.core.app_version import parse_version
 from app.core.deps import DB, SuperviseurUser
 from app.models.supervisor_presence import SupervisorPresenceCheck
 from app.services.progression_service import active_session_for
@@ -39,7 +40,9 @@ class PresenceCheckIn(BaseModel):
     date_jour: str       # ISO YYYY-MM-DD
     # Période du programme choisie par le superviseur avant le pointage
     semaine:    Optional[int] = Field(default=None, ge=1, le=53)
-    jour_cours: Optional[int] = Field(default=None, ge=1, le=7)
+    # 1 = Jour 1. Les versions de l'app antérieures à 1.4.1 envoyaient l'index
+    # (0 = Jour 1) : voir _jour_cours_normalise.
+    jour_cours: Optional[int] = Field(default=None, ge=0, le=7)
     entries:   list[PresenceEntryIn] = Field(max_length=500)
 
 
@@ -54,6 +57,21 @@ class PresenceCheckOut(BaseModel):
     semaine:    Optional[int] = None
     jour_cours: Optional[int] = None
     entries:   list[PresenceEntryOut]
+
+
+# Avant la 1.4.1, l'écran de pointage superviseur envoyait l'index du jour
+# (0 = Jour 1) : « Jour 1 » était refusé (422) et l'app relançait l'envoi en
+# boucle (écran qui clignote) ; « Jour 2 » était enregistré comme Jour 1.
+_VERSION_JOUR_CORRIGE = (1, 4, 1)
+
+
+def _jour_cours_normalise(jour: Optional[int], version: Optional[str]) -> Optional[int]:
+    if jour is None:
+        return None
+    v = parse_version(version)
+    if jour == 0 or (v is not None and v < _VERSION_JOUR_CORRIGE):
+        jour += 1
+    return jour if 1 <= jour <= 7 else None
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -102,6 +120,7 @@ async def submit_presence_check(
     body: PresenceCheckIn,
     current_user: SuperviseurUser,
     db: DB,
+    request: Request,
 ) -> dict:
     """
     Enregistre/valide le pointage de présence du jour (batch).
@@ -110,6 +129,7 @@ async def submit_presence_check(
     """
     if not body.entries:
         raise HTTPException(status_code=422, detail="La liste de pointages est vide.")
+    body.jour_cours = _jour_cours_normalise(body.jour_cours, request.headers.get("X-App-Version"))
 
     try:
         target_date = date.fromisoformat(body.date_jour)
