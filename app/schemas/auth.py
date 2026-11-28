@@ -78,6 +78,9 @@ class MeResponse(BaseModel):
     must_change_password: bool = False
     # Inspecteur : IEF consultée (lot L8).
     ief:                 Optional[str] = None
+    # Espace de l'app mobile pour ce compte : tuteur, superviseur, inspecteur, ou
+    # None (compte du seul tableau de bord : admin, évaluateur).
+    espace_mobile:       Optional[str] = None
 
     model_config = {"from_attributes": True}
 

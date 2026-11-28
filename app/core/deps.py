@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -98,6 +98,26 @@ def is_evaluateur(user: User) -> bool:
     return user.role == UserRole.coordonnateur and (user.title or "").strip().lower() == "evaluateur"
 
 
+def est_superviseur_terrain(user: User) -> bool:
+    """Compte qui utilise l'espace superviseur de l'app mobile : rôle superviseur,
+    ou coordonnateur (non évaluateur) — la page « Comptes » du dashboard créait ces
+    comptes sous le libellé « Superviseur » avec le rôle coordonnateur."""
+    if user.role == UserRole.superviseur:
+        return True
+    return user.role == UserRole.coordonnateur and not is_evaluateur(user)
+
+
+def espace_mobile(user: User) -> Optional[str]:
+    """Espace de l'app mobile où ranger ce compte (None : compte du dashboard seul)."""
+    if user.role == UserRole.enseignant:
+        return "tuteur"
+    if user.role == UserRole.inspecteur:
+        return "inspecteur"
+    if est_superviseur_terrain(user):
+        return "superviseur"
+    return None
+
+
 async def require_admin(
     request: Request,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -133,7 +153,7 @@ async def require_superviseur(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """Réservé aux superviseurs de terrain (app mobile — onglets superviseur)."""
-    if current_user.role != UserRole.superviseur:
+    if not est_superviseur_terrain(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès réservé aux superviseurs.",
@@ -145,7 +165,7 @@ async def require_mobile_user(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """Autorise enseignants ET superviseurs — pour les endpoints partagés (ex: rapports journaliers)."""
-    if current_user.role not in (UserRole.enseignant, UserRole.superviseur):
+    if current_user.role != UserRole.enseignant and not est_superviseur_terrain(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès réservé aux utilisateurs de l'application mobile.",
@@ -187,7 +207,7 @@ async def require_utilisateur_app(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     """Tous les comptes de l'application mobile, inspecteur compris (signalements, aide)."""
-    if current_user.role not in (UserRole.enseignant, UserRole.superviseur, UserRole.inspecteur):
+    if current_user.role not in (UserRole.enseignant, UserRole.inspecteur) and not est_superviseur_terrain(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès réservé aux utilisateurs de l'application mobile.",

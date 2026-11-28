@@ -38,7 +38,8 @@ def _clause_classes(user: User, school_ids: list[uuid.UUID]):
 
 
 async def superviseur_responsable(db: AsyncSession, auteur: User) -> Optional[uuid.UUID]:
-    if auteur.role == UserRole.superviseur:
+    # Superviseur de terrain (y compris un ancien compte coordonnateur rangé dans l'espace superviseur).
+    if auteur.role in (UserRole.superviseur, UserRole.coordonnateur):
         return auteur.id
     actifs = (User.role == UserRole.superviseur, User.status == UserStatus.actif, User.archived_at.is_(None))
     explicites = (await db.execute(

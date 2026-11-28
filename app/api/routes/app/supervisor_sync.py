@@ -108,7 +108,8 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB, request: Reques
         name=current_user.name,
         phone=current_user.phone,
         email=current_user.email,
-        role=current_user.role.value,
+        # Toujours « superviseur » : l'app range ce compte dans l'espace superviseur.
+        role="superviseur",
     )
 
     # ── École de rattachement (relation chargée en selectin sur User) ─────────
@@ -222,8 +223,10 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB, request: Reques
     rapport_libelles = {l.cle: l.texte for l in libelles_rows}
 
     # ── Nombre de semaines/jours du programme (même config que la partie tuteur) ──
+    # Résolu avec l'école du superviseur, comme pour ses tuteurs : une configuration
+    # propre à l'école s'applique aux deux profils.
     nb_semaines, nb_jours = await get_config_for(
-        db, None, session.id if session else None
+        db, current_user.school_id, session.id if session else None
     )
 
     await enregistrer_contact(db, current_user, request.headers.get("x-app-version"), None, None)

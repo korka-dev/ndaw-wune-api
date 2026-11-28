@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 
-from app.core.deps import CurrentUserPendingOk, bearer_scheme
+from app.core.deps import CurrentUserPendingOk, bearer_scheme, espace_mobile
 from app.core.rate_limit import limiter
 from app.core.security import (
     RevocationUnavailable,
@@ -158,6 +158,7 @@ async def me(current_user: CurrentUserPendingOk, db: AsyncSession = Depends(get_
     out.app_access = acces["app_access"]
     out.minuteur_visible = acces["minuteur_visible"]
     out.retention_saisies_jours = settings.RETENTION_SAISIES_TELEPHONE_JOURS
+    out.espace_mobile = espace_mobile(current_user)
     return out
 
 
