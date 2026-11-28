@@ -6,7 +6,8 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from app.core.app_version import is_outdated
-from app.core.deps import DB, CurrentUser
+from app.core.deps import DB, CurrentUser, TeacherUser
+from app.core.etag import reponse_avec_etag
 from app.models.user import UserRole
 from app.core.redis import get_redis
 from app.core.config import settings
@@ -70,12 +71,13 @@ async def sync(current_user: CurrentUser, db: DB, request: Request) -> SyncPaylo
     return await _finaliser(db, current_user, request, payload)
 
 
-async def _finaliser(db, user, request: Request, payload: SyncPayload) -> SyncPayload:
-    """Règles terrain toujours à jour (hors cache) et trace de la synchronisation (RET15)."""
+async def _finaliser(db, user, request: Request, payload: SyncPayload) -> Response:
+    """Règles terrain toujours à jour (hors cache) et trace de la synchronisation (RET15).
+    Réponse 304 si l'app a déjà ce contenu (ETag)."""
     payload.parametres_terrain = ParametresTerrain(**parametres_terrain())
     await enregistrer_contact(db, user, request.headers.get("x-app-version"),
                               payload.profile.minuteur_visible, payload.profile.app_access)
-    return payload
+    return reponse_avec_etag(request, payload)
 
 
 @router.post("/invalidate", status_code=status.HTTP_204_NO_CONTENT)

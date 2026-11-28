@@ -17,6 +17,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func
 
+from app.core.etag import reponse_avec_etag
 from app.core.deps import DB, SuperviseurUser
 from app.models.evaluation_competence import EvaluationCompetence
 from app.models.rapport_libelle import RapportLibelle
@@ -230,7 +231,8 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB, request: Reques
     )
 
     await enregistrer_contact(db, current_user, request.headers.get("x-app-version"), None, None)
-    return SupervisorSyncPayload(
+    # 304 si l'app a déjà ce contenu (ETag) : économie de données mobiles.
+    return reponse_avec_etag(request, SupervisorSyncPayload(
         parametres_terrain=ParametresTerrain(**parametres_terrain()),
         synced_at=datetime.now(timezone.utc).isoformat(),
         profile=profile,
@@ -242,4 +244,4 @@ async def supervisor_sync(current_user: SuperviseurUser, db: DB, request: Reques
         rapport_libelles=rapport_libelles,
         nb_semaines=nb_semaines,
         nb_jours=nb_jours,
-    )
+    ))

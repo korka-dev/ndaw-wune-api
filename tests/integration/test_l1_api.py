@@ -113,3 +113,4 @@ async def test_version_minimale(client, tag, monkeypatch):  # APP-46
     assert r.status_code != 426
     r = await client.get("/api/v1/app-version")
     assert r.json()["min_version"] == "2.0.0"
+    assert "download_url" in r.json()  # lien du dernier APK (vide par défaut)

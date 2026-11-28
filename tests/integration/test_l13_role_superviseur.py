@@ -79,3 +79,40 @@ async def test_semaines_du_superviseur_suivent_son_ecole(client, tag):
         async with AsyncSessionLocal() as s:
             await s.execute(delete(ProgressionConfig).where(ProgressionConfig.school_id == school.id))
             await s.commit()
+
+
+# ── Économie de données : 304 quand la synchronisation n'a pas changé ─────────
+
+async def test_sync_tuteur_304_puis_200_apres_modification(client, tag):
+    school = await create_school(tag)
+    tuteur = await create_user(UserRole.enseignant, tag, school_id=school.id, classes=["CE1"])
+    _, h = await _me(client, tuteur)
+    r = await client.get(f"{API}/app/sync", headers=h)
+    assert r.status_code == 200 and r.headers.get("etag"), r.text
+    etag = r.headers["etag"]
+    r = await client.get(f"{API}/app/sync", headers={**h, "If-None-Match": etag})
+    assert r.status_code == 304 and r.content == b""
+    # Modification côté admin (nombre de semaines de l'école) → nouveau contenu.
+    async with AsyncSessionLocal() as s:
+        s.add(ProgressionConfig(school_id=school.id, session_id=None, nb_semaines=25, nb_jours=3))
+        await s.commit()
+    try:
+        # Le bouton « actualiser » de l'app vide le cache serveur du tuteur.
+        assert (await client.post(f"{API}/app/sync/invalidate", headers=h)).status_code == 204
+        r = await client.get(f"{API}/app/sync", headers={**h, "If-None-Match": etag})
+        assert r.status_code == 200 and r.json()["nb_semaines"] == 25
+        assert r.headers["etag"] != etag
+    finally:
+        async with AsyncSessionLocal() as s:
+            await s.execute(delete(ProgressionConfig).where(ProgressionConfig.school_id == school.id))
+            await s.commit()
+
+
+async def test_sync_superviseur_304(client, tag):
+    school = await create_school(tag)
+    sup = await create_user(UserRole.superviseur, tag, school_id=school.id)
+    _, h = await _me(client, sup)
+    r = await client.get(f"{API}/app/supervisor/sync", headers=h)
+    assert r.status_code == 200
+    r2 = await client.get(f"{API}/app/supervisor/sync", headers={**h, "If-None-Match": r.headers["etag"]})
+    assert r2.status_code == 304

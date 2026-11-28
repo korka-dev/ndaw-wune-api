@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     MIN_APP_VERSION: str = ""
     # Dernière version publiée (information affichée par l'app).
     LATEST_APP_VERSION: str = ""
+    # Lien de téléchargement du dernier APK, proposé par l'app quand une version
+    # plus récente (LATEST_APP_VERSION) est publiée. Vide : l'app renvoie vers le coordonnateur.
+    APP_DOWNLOAD_URL: str = ""
 
     # ── Durées de conservation (APP-07, APP-13, APP-14) ──────────────────────
     # Vide = aucune purge tant qu'ARED n'a pas fixé la durée (valeur prudente).

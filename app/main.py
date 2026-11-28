@@ -288,6 +288,7 @@ async def app_version_policy() -> dict:
     return {
         "min_version": settings.MIN_APP_VERSION or None,
         "latest_version": settings.LATEST_APP_VERSION or None,
+        "download_url": settings.APP_DOWNLOAD_URL or None,
     }
 
 
