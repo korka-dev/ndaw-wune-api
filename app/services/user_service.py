@@ -52,7 +52,7 @@ async def _assert_unique_credentials(
     if phone:
         conditions.append(User.phone == phone)
 
-    q = select(User.id, User.email, User.phone).where(or_(*conditions))
+    q = select(User.id, User.email, User.phone, User.name, User.role, User.title, User.archived_at).where(or_(*conditions))
     if exclude_id:
         q = q.where(User.id != exclude_id)
 
@@ -60,9 +60,24 @@ async def _assert_unique_credentials(
     if row is None:
         return
 
+    # Routes réservées à l'administration : on nomme le compte en conflit pour
+    # que l'admin sache lequel modifier ou restaurer (il peut être archivé ou
+    # d'un autre rôle, donc absent de la liste affichée).
+    titulaire = f" par « {row.name} » ({_libelle_compte(row.role, row.title)}{', archivé' if row.archived_at else ''})"
     if email and normalize_email(row.email) == email:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cet e-mail est déjà utilisé.")
-    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ce numéro de téléphone est déjà utilisé.")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cet e-mail est déjà utilisé{titulaire}.")
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Ce numéro de téléphone est déjà utilisé{titulaire}.")
+
+
+def _libelle_compte(role: UserRole, title: Optional[str]) -> str:
+    if role == UserRole.coordonnateur:
+        return "évaluateur" if title == "evaluateur" else "superviseur"
+    return {
+        UserRole.admin: "administrateur",
+        UserRole.enseignant: "enseignant",
+        UserRole.superviseur: "superviseur",
+        UserRole.inspecteur: "inspecteur",
+    }.get(role, str(role.value if hasattr(role, "value") else role))
 
 
 # ── API publique du service ────────────────────────────────────────────────────

@@ -116,3 +116,18 @@ async def test_sync_superviseur_304(client, tag):
     assert r.status_code == 200
     r2 = await client.get(f"{API}/app/supervisor/sync", headers={**h, "If-None-Match": r.headers["etag"]})
     assert r2.status_code == 304
+
+
+async def test_numero_deja_pris_nomme_le_compte_en_conflit(client, tag):
+    """Le 409 nomme le compte (même archivé ou d'un autre rôle, donc absent
+    de la liste des superviseurs) pour que l'admin sache quoi corriger."""
+    from datetime import datetime, timezone
+    phone = f"77{abs(hash(tag)) % 10**7:07d}"
+    await create_user(UserRole.inspecteur, tag, phone=phone, archived_at=datetime.now(timezone.utc))
+    admin = await create_user(UserRole.admin, tag)
+    h = bearer(await login(client, admin))
+    r = await client.post(f"{API}/admin/superviseurs", headers=h,
+                          json={"name": "Nouveau sup", "phone": phone, "role": "coordonnateur"})
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert "téléphone" in detail and f"Test inspecteur {tag}" in detail and "inspecteur, archivé" in detail, detail
