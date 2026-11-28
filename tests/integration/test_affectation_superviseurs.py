@@ -95,3 +95,30 @@ async def test_evaluateur_n_est_pas_un_superviseur(tag):
         r = await service.traiter(db, service.lire(_xlsx([["1", "1", "E", "T", tt, "Ev", te]])))
         assert [x["telephone"] for x in r["superviseurs_introuvables"]] == [te]
         await db.rollback()
+
+
+async def test_route_import_apercu_puis_enregistrement(client, tag):
+    from .conftest import bearer, login
+    ts, tt = _tel(), _tel()
+    sup = await create_user(UserRole.superviseur, tag, phone=ts)
+    tut = await create_user(UserRole.enseignant, tag, phone=tt)
+    h = bearer(await login(client, await create_user(UserRole.admin, tag)))
+    url = "/api/v1/admin/superviseurs/import-affectations"
+    fichier = {"file": ("base.xlsx", _xlsx([["1", "1", "E", "T", tt, "S", ts]]),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+
+    r = await client.post(url, headers=h, files=fichier)
+    assert r.status_code == 200, r.text
+    assert r.json()["dry_run"] is True and len(r.json()["affectes"]) == 1
+    async with AsyncSessionLocal() as db:
+        assert not (await db.get(User, sup.id)).classes        # aperçu : rien d'écrit
+
+    r = await client.post(url, headers=h, files=fichier, params={"dry_run": "false"})
+    assert r.status_code == 200, r.text
+    async with AsyncSessionLocal() as db:
+        assert (await db.get(User, sup.id)).classes == [str(tut.id)]
+
+    # Fichier sans onglet « Classes » : message clair.
+    wb = openpyxl.Workbook(); buf = io.BytesIO(); wb.save(buf)
+    r = await client.post(url, headers=h, files={"file": ("x.xlsx", buf.getvalue(), "application/octet-stream")})
+    assert r.status_code == 422 and "Classes" in r.json()["detail"]

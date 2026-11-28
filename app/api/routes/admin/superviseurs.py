@@ -12,7 +12,7 @@ import io
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -26,6 +26,9 @@ from app.models.user import User, UserRole
 from app.models.school import School
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 from app.services import user_service
+from app.services import affectation_superviseurs_service
+from app.services.audit_service import journaliser
+from app.core.upload_utils import read_upload_capped
 from app.services.archivage import non_archive
 
 router = APIRouter(prefix="/superviseurs", tags=["Admin — Superviseurs"])
@@ -134,6 +137,30 @@ async def export_superviseurs_xlsx(db: DB, _: AdminUser, fields: Optional[str] =
         fields=fields,
         filename="superviseurs.xlsx",
     )
+
+
+@router.post("/import-affectations")
+async def importer_affectations(
+    db: DB,
+    admin: AdminUser,
+    file: UploadFile = File(...),
+    dry_run: bool = Query(True, description="Aperçu : rien n'est enregistré."),
+    remplacer: bool = Query(False, description="Remplace les affectations existantes au lieu d'ajouter."),
+) -> dict:
+    """Affecte à chaque superviseur ses tuteurs depuis l'onglet « Classes » de la
+    base de l'année (Superviseur proposé → Enseignant proposé, par téléphone).
+    Le fichier est lu en mémoire, jamais stocké."""
+    lignes = affectation_superviseurs_service.lire(await read_upload_capped(file))
+    r = await affectation_superviseurs_service.traiter(db, lignes, remplacer=remplacer)
+    if dry_run:
+        await db.rollback()
+    elif r["affectes"]:
+        journaliser(db, acteur=admin, action="update", entity="Superviseur",
+                    path="/admin/superviseurs/import-affectations",
+                    description=f"Import des affectations superviseurs → tuteurs "
+                                f"({'remplacement' if remplacer else 'ajout'}) : "
+                                f"{len(r['affectes'])} superviseur(s) mis à jour.")
+    return {"dry_run": dry_run, "remplacer": remplacer, "lignes": len(lignes), **r}
 
 
 @router.get("/{superviseur_id}", response_model=UserResponse)
